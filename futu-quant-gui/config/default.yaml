@@ -1,0 +1,52 @@
+# 富途量化数据平台配置
+opend:
+  host: "127.0.0.1"
+  port: 11111
+  is_encrypt: false
+  rsa_key_path: ""
+
+storage:
+  db_type: "sqlite"
+  sqlite_path: "./data/futu_quant.db"
+  parquet_dir: "./data/export"
+  export_csv: false
+  csv_dir: "./data/export/csv"
+
+kline:
+  default_types: ["K_1M", "K_5M", "K_60M", "K_DAY"]
+  max_count_per_request: 1000
+  request_interval: 0.5
+  lookback_days:
+    K_1M: 90
+    K_5M: 180
+    K_15M: 365
+    K_30M: 365
+    K_60M: 730
+    K_DAY: 3650
+
+tick:
+  enabled: true
+  retention_days: 365
+  collect_interval: 0.3
+  max_count: 1000
+
+watchlist:
+  US: []
+  HK: []
+  SH: []
+  SZ: []
+
+scheduler:
+  auto_update: false
+  daily_update_time: "16:30"
+  realtime_collect: false
+
+logging:
+  level: "INFO"
+  file: "./logs/futu_quant.log"
+  rotation: "7 days"
+  max_size: "50 MB"
+
+analysis:
+  model_dir: "./models"
+  feature_window: 60
