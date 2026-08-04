@@ -118,6 +118,21 @@ class ConnectionPanel(BasePanel):
         from downloaders.tick_collector import TickCollector
         self._main.kline_dl = KlineDownloader(client, self._main.db, self._main.config)
         self._main.tick_cl = TickCollector(client, self._main.db, self._main.config)
+
+        from core.quote_subscriber import QuoteSubscriber
+        from trading.fee_calculator import FeeCalculator
+        from trading.paper_engine import PaperEngine
+        from strategy.indicators import IndicatorEngine
+        from strategy.engine import StrategyEngine
+
+        self._main.quote_sub = QuoteSubscriber(client)
+        fee_calc = FeeCalculator(self._main.config)
+        self._main.paper_engine = PaperEngine(self._main.db, fee_calc, self._main.config)
+        indicator_eng = IndicatorEngine()
+        self._main.strategy_engine = StrategyEngine(
+            self._main.db, self._main.paper_engine, indicator_eng, self._main.config
+        )
+
         self._main.set_connected(True)
 
         self._log.append(f'<span style="color:{COLORS["green"]}">✅ 连接成功！</span>')

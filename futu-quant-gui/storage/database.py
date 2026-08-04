@@ -97,6 +97,118 @@ class Database:
         )
         """)
 
+        # 实时行情缓存表
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS realtime_quote (
+            code TEXT PRIMARY KEY,
+            name TEXT, price REAL, change_rate REAL, change_val REAL,
+            volume REAL, turnover REAL, amplitude REAL,
+            high REAL, low REAL, open REAL, prev_close REAL,
+            bid_price REAL, ask_price REAL, bid_vol REAL, ask_vol REAL,
+            pe_ratio REAL, pb_ratio REAL, volume_ratio REAL,
+            updated_at TEXT
+        )
+        """)
+
+        # 价格预警表
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS price_alert (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL, name TEXT,
+            condition TEXT NOT NULL,
+            target_price REAL NOT NULL,
+            triggered INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            triggered_at TEXT
+        )
+        """)
+
+        # 模拟账户表
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS paper_account (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT DEFAULT '默认账户',
+            initial_cash REAL DEFAULT 1000000,
+            cash REAL DEFAULT 1000000,
+            total_asset REAL DEFAULT 1000000,
+            currency TEXT DEFAULT 'CNY',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+        """)
+
+        # 模拟持仓表
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS paper_position (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL,
+            code TEXT NOT NULL, name TEXT, market TEXT,
+            quantity INTEGER DEFAULT 0,
+            avg_cost REAL DEFAULT 0,
+            current_price REAL DEFAULT 0,
+            unrealized_pnl REAL DEFAULT 0,
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(account_id, code)
+        )
+        """)
+
+        # 模拟订单表
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS paper_order (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL,
+            code TEXT NOT NULL, name TEXT, market TEXT,
+            direction TEXT NOT NULL,
+            order_type TEXT DEFAULT 'MARKET',
+            quantity INTEGER NOT NULL,
+            price REAL,
+            filled_quantity INTEGER DEFAULT 0,
+            filled_price REAL,
+            commission REAL DEFAULT 0,
+            tax REAL DEFAULT 0,
+            fees REAL DEFAULT 0,
+            status TEXT DEFAULT 'PENDING',
+            strategy_id INTEGER,
+            created_at TEXT DEFAULT (datetime('now')),
+            filled_at TEXT
+        )
+        """)
+
+        # 策略表
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS strategy (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            type TEXT DEFAULT 'visual',
+            target_codes TEXT,
+            conditions TEXT,
+            actions TEXT,
+            script TEXT,
+            enabled INTEGER DEFAULT 0,
+            account_id INTEGER,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+        """)
+
+        # 策略日志表
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS strategy_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id INTEGER NOT NULL,
+            event TEXT NOT NULL,
+            detail TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+        """)
+
+        # 索引
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_paper_position_account ON paper_position(account_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_paper_order_account ON paper_order(account_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_paper_order_status ON paper_order(status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_strategy_log_strategy ON strategy_log(strategy_id)")
+
         self.conn.commit()
         logger.info("数据表初始化完成")
 
@@ -237,6 +349,281 @@ class Database:
         df.to_csv(fpath, index=False, encoding="utf-8-sig")
         logger.info(f"导出CSV: {fpath} ({len(df)}条)")
         return fpath
+
+    # ─── 实时行情 ───
+
+    def save_quotes(self, quotes: list):
+        """批量保存实时行情"""
+        if not quotes:
+            return
+        cur = self.conn.cursor()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for q in quotes:
+            cur.execute("""
+                INSERT OR REPLACE INTO realtime_quote
+                (code, name, price, change_rate, change_val,
+                 volume, turnover, amplitude, high, low, open, prev_close,
+                 bid_price, ask_price, bid_vol, ask_vol,
+                 pe_ratio, pb_ratio, volume_ratio, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                q.get("code"), q.get("name"), q.get("price"),
+                q.get("change_rate"), q.get("change_val"),
+                q.get("volume"), q.get("turnover"), q.get("amplitude"),
+                q.get("high"), q.get("low"), q.get("open"), q.get("prev_close"),
+                q.get("bid_price"), q.get("ask_price"),
+                q.get("bid_vol"), q.get("ask_vol"),
+                q.get("pe_ratio"), q.get("pb_ratio"), q.get("volume_ratio"),
+                now,
+            ))
+        self.conn.commit()
+        logger.debug(f"保存实时行情: {len(quotes)}条")
+
+    def get_quotes(self) -> list:
+        """获取所有缓存的实时行情"""
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM realtime_quote ORDER BY code")
+        cols = [desc[0] for desc in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    # ─── 价格预警 ───
+
+    def save_alert(self, code, name, condition, target_price) -> int:
+        """保存价格预警"""
+        cur = self.conn.cursor()
+        cur.execute("""
+            INSERT INTO price_alert (code, name, condition, target_price)
+            VALUES (?, ?, ?, ?)
+        """, (code, name, condition, target_price))
+        self.conn.commit()
+        alert_id = cur.lastrowid
+        logger.info(f"新增价格预警: {code} {condition} {target_price}")
+        return alert_id
+
+    def get_alerts(self, triggered=None) -> list:
+        """获取价格预警列表"""
+        cur = self.conn.cursor()
+        if triggered is not None:
+            cur.execute("SELECT * FROM price_alert WHERE triggered=? ORDER BY created_at DESC",
+                        (int(triggered),))
+        else:
+            cur.execute("SELECT * FROM price_alert ORDER BY created_at DESC")
+        cols = [desc[0] for desc in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def trigger_alert(self, alert_id):
+        """触发预警"""
+        cur = self.conn.cursor()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute("UPDATE price_alert SET triggered=1, triggered_at=? WHERE id=?",
+                    (now, alert_id))
+        self.conn.commit()
+        logger.info(f"预警已触发: id={alert_id}")
+
+    def delete_alert(self, alert_id):
+        """删除预警"""
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM price_alert WHERE id=?", (alert_id,))
+        self.conn.commit()
+        logger.info(f"删除预警: id={alert_id}")
+
+    # ─── 模拟账户 ───
+
+    def create_paper_account(self, name="默认账户", initial_cash=1000000) -> int:
+        """创建模拟账户"""
+        cur = self.conn.cursor()
+        cur.execute("""
+            INSERT INTO paper_account (name, initial_cash, cash, total_asset)
+            VALUES (?, ?, ?, ?)
+        """, (name, initial_cash, initial_cash, initial_cash))
+        self.conn.commit()
+        account_id = cur.lastrowid
+        logger.info(f"创建模拟账户: {name} 初始资金={initial_cash}")
+        return account_id
+
+    def get_paper_account(self, account_id) -> dict:
+        """获取模拟账户"""
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM paper_account WHERE id=?", (account_id,))
+        row = cur.fetchone()
+        if not row:
+            return {}
+        cols = [desc[0] for desc in cur.description]
+        return dict(zip(cols, row))
+
+    def update_paper_account(self, account_id, **kwargs):
+        """更新模拟账户"""
+        if not kwargs:
+            return
+        kwargs["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sets = ", ".join(f"{k}=?" for k in kwargs)
+        vals = list(kwargs.values()) + [account_id]
+        cur = self.conn.cursor()
+        cur.execute(f"UPDATE paper_account SET {sets} WHERE id=?", vals)
+        self.conn.commit()
+        logger.debug(f"更新模拟账户: id={account_id}")
+
+    # ─── 模拟持仓 ───
+
+    def get_positions(self, account_id) -> list:
+        """获取模拟持仓列表"""
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM paper_position WHERE account_id=? ORDER BY code",
+                    (account_id,))
+        cols = [desc[0] for desc in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def save_position(self, account_id, code, name, market, quantity, avg_cost, current_price=0):
+        """保存/更新持仓 (UPSERT)"""
+        unrealized_pnl = (current_price - avg_cost) * quantity if current_price else 0
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur = self.conn.cursor()
+        cur.execute("""
+            INSERT INTO paper_position
+            (account_id, code, name, market, quantity, avg_cost, current_price, unrealized_pnl, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(account_id, code) DO UPDATE SET
+                name=excluded.name, market=excluded.market,
+                quantity=excluded.quantity, avg_cost=excluded.avg_cost,
+                current_price=excluded.current_price,
+                unrealized_pnl=excluded.unrealized_pnl,
+                updated_at=excluded.updated_at
+        """, (account_id, code, name, market, quantity, avg_cost, current_price, unrealized_pnl, now))
+        self.conn.commit()
+        logger.debug(f"保存持仓: {code} 数量={quantity} 均价={avg_cost}")
+
+    def update_position(self, account_id, code, **kwargs):
+        """更新持仓"""
+        if not kwargs:
+            return
+        kwargs["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sets = ", ".join(f"{k}=?" for k in kwargs)
+        vals = list(kwargs.values()) + [account_id, code]
+        cur = self.conn.cursor()
+        cur.execute(f"UPDATE paper_position SET {sets} WHERE account_id=? AND code=?", vals)
+        self.conn.commit()
+        logger.debug(f"更新持仓: {code}")
+
+    def delete_position(self, account_id, code):
+        """删除持仓"""
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM paper_position WHERE account_id=? AND code=?",
+                    (account_id, code))
+        self.conn.commit()
+        logger.debug(f"删除持仓: {code}")
+
+    # ─── 模拟订单 ───
+
+    def save_order(self, account_id, code, name, market, direction, order_type,
+                   quantity, price=None, strategy_id=None) -> int:
+        """保存订单"""
+        cur = self.conn.cursor()
+        cur.execute("""
+            INSERT INTO paper_order
+            (account_id, code, name, market, direction, order_type, quantity, price, strategy_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (account_id, code, name, market, direction, order_type, quantity, price, strategy_id))
+        self.conn.commit()
+        order_id = cur.lastrowid
+        logger.info(f"新建订单: {direction} {code} x{quantity} id={order_id}")
+        return order_id
+
+    def update_order(self, order_id, **kwargs):
+        """更新订单"""
+        if not kwargs:
+            return
+        sets = ", ".join(f"{k}=?" for k in kwargs)
+        vals = list(kwargs.values()) + [order_id]
+        cur = self.conn.cursor()
+        cur.execute(f"UPDATE paper_order SET {sets} WHERE id=?", vals)
+        self.conn.commit()
+        logger.debug(f"更新订单: id={order_id}")
+
+    def get_orders(self, account_id, status=None) -> list:
+        """获取订单列表"""
+        cur = self.conn.cursor()
+        if status:
+            cur.execute("SELECT * FROM paper_order WHERE account_id=? AND status=? ORDER BY created_at DESC",
+                        (account_id, status))
+        else:
+            cur.execute("SELECT * FROM paper_order WHERE account_id=? ORDER BY created_at DESC",
+                        (account_id,))
+        cols = [desc[0] for desc in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    # ─── 策略 ───
+
+    def save_strategy(self, name, type_="visual", target_codes="", conditions="",
+                      actions="", script="", account_id=None) -> int:
+        """保存策略"""
+        cur = self.conn.cursor()
+        cur.execute("""
+            INSERT INTO strategy
+            (name, type, target_codes, conditions, actions, script, account_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (name, type_, target_codes, conditions, actions, script, account_id))
+        self.conn.commit()
+        strategy_id = cur.lastrowid
+        logger.info(f"新建策略: {name} id={strategy_id}")
+        return strategy_id
+
+    def update_strategy(self, strategy_id, **kwargs):
+        """更新策略"""
+        if not kwargs:
+            return
+        kwargs["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sets = ", ".join(f"{k}=?" for k in kwargs)
+        vals = list(kwargs.values()) + [strategy_id]
+        cur = self.conn.cursor()
+        cur.execute(f"UPDATE strategy SET {sets} WHERE id=?", vals)
+        self.conn.commit()
+        logger.debug(f"更新策略: id={strategy_id}")
+
+    def get_strategies(self) -> list:
+        """获取所有策略"""
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM strategy ORDER BY created_at DESC")
+        cols = [desc[0] for desc in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def get_strategy(self, strategy_id) -> dict:
+        """获取单个策略"""
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM strategy WHERE id=?", (strategy_id,))
+        row = cur.fetchone()
+        if not row:
+            return {}
+        cols = [desc[0] for desc in cur.description]
+        return dict(zip(cols, row))
+
+    def delete_strategy(self, strategy_id):
+        """删除策略"""
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM strategy WHERE id=?", (strategy_id,))
+        cur.execute("DELETE FROM strategy_log WHERE strategy_id=?", (strategy_id,))
+        self.conn.commit()
+        logger.info(f"删除策略: id={strategy_id}")
+
+    # ─── 策略日志 ───
+
+    def save_strategy_log(self, strategy_id, event, detail=""):
+        """保存策略日志"""
+        cur = self.conn.cursor()
+        cur.execute("""
+            INSERT INTO strategy_log (strategy_id, event, detail)
+            VALUES (?, ?, ?)
+        """, (strategy_id, event, detail))
+        self.conn.commit()
+        logger.debug(f"策略日志: strategy={strategy_id} event={event}")
+
+    def get_strategy_logs(self, strategy_id, limit=100) -> list:
+        """获取策略日志"""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM strategy_log WHERE strategy_id=? ORDER BY created_at DESC LIMIT ?",
+            (strategy_id, limit))
+        cols = [desc[0] for desc in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
 
     def close(self):
         if self.conn:

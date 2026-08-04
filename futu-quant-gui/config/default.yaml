@@ -50,3 +50,41 @@ logging:
 analysis:
   model_dir: "./models"
   feature_window: 60
+
+realtime:
+  refresh_interval: 3000
+  max_stocks: 50
+
+paper_trading:
+  default_initial_cash: 1000000
+  currency: "CNY"
+  fx_rate:
+    HKD_CNY: 0.92
+    USD_CNY: 7.25
+  fees:
+    SH:
+      commission_rate: 0.00025
+      min_commission: 5
+      stamp_tax_rate: 0.001
+      transfer_fee_rate: 0.000002
+    SZ:
+      commission_rate: 0.00025
+      min_commission: 5
+      stamp_tax_rate: 0.001
+    HK:
+      commission_rate: 0.0003
+      min_commission: 3
+      platform_fee: 15
+      stamp_duty_rate: 0.0013
+      trading_fee_rate: 0.00005
+      settlement_fee_rate: 0.00002
+    US:
+      commission_per_share: 0.005
+      min_commission: 1
+      sec_fee_rate: 0.0000278
+      taf_fee_per_share: 0.000166
+
+strategy:
+  eval_interval: 5000
+  max_strategies: 20
+  backtest_default_cash: 1000000

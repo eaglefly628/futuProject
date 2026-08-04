@@ -16,6 +16,10 @@ PROJECT_ROOT = Path(__file__).parent.parent
 # 侧栏菜单项配置
 MENU_ITEMS = [
     ("📊", "数据总览", "dashboard"),
+    ("📡", "实时行情", "realtime"),
+    ("💰", "模拟交易", "paper"),
+    ("🧪", "策略编辑", "strategy"),
+    None,  # 分割线
     ("📈", "K线下载", "kline"),
     ("⚡", "批量下载", "batch"),
     ("🔄", "逐笔采集", "tick"),
@@ -46,6 +50,9 @@ class MainWindow(QMainWindow):
         self.kline_dl = None
         self.tick_cl = None
         self.analyzer = None
+        self.quote_sub = None
+        self.paper_engine = None
+        self.strategy_engine = None
         self._connected = False
 
         self._init_backend()
@@ -147,9 +154,15 @@ class MainWindow(QMainWindow):
         from gui.panels.quality_check import QualityCheckPanel
         from gui.panels.settings import SettingsPanel
         from gui.panels.connection import ConnectionPanel
+        from gui.panels.realtime_monitor import RealtimeMonitorPanel
+        from gui.panels.paper_trading import PaperTradingPanel
+        from gui.panels.strategy_editor import StrategyEditorPanel
 
         panel_map = {
             "dashboard": DashboardPanel(self),
+            "realtime": RealtimeMonitorPanel(self),
+            "paper": PaperTradingPanel(self),
+            "strategy": StrategyEditorPanel(self),
             "kline": KlineDownloadPanel(self),
             "batch": BatchDownloadPanel(self),
             "tick": TickCollectPanel(self),
@@ -215,6 +228,11 @@ class MainWindow(QMainWindow):
         return self._connected
 
     def closeEvent(self, event):
+        if self.quote_sub:
+            try:
+                self.quote_sub.close()
+            except Exception:
+                pass
         if self.client:
             try:
                 self.client.close()
