@@ -76,7 +76,8 @@ class EastmoneyClient:
     """东财行情客户端"""
 
     def __init__(self, timeout: int = 15, min_gap: float = 0.6,
-                 use_proxy: Optional[bool] = None):
+                 use_proxy: Optional[bool] = None,
+                 trends_ndays: int = 5):
         """
         Args:
             use_proxy: None=先直连再回退代理（默认）, False=只直连, True=只走代理
@@ -86,6 +87,8 @@ class EastmoneyClient:
         """
         self.timeout = timeout
         self.min_gap = min_gap
+        # trends2 接口的天数上限，东财约束在 5 左右，可按需调
+        self.trends_ndays = trends_ndays
         self._last_call = 0.0
         self._use_proxy = use_proxy
         # None 时先试直连；显式指定则照做
@@ -166,7 +169,28 @@ class EastmoneyClient:
         secid = to_secid(code)
 
         if ktype == "K_1M":
-            df = self._get_trends(secid)
+            # 1分钟有两条路，历史深度不同，取返回多的那个：
+            #   kline?klt=1   —— 标准K线接口
+            #   trends2       —— 分时接口，akshare 用的是这条（ndays 上限约 5 天）
+            df = None
+            try:
+                df = self._get_kline(secid, "1", adjust)
+            except Exception as e:
+                logger.debug(f"[东财] {secid} kline(klt=1) 失败: {e}")
+
+            trends = None
+            try:
+                trends = self._get_trends(secid, ndays=self.trends_ndays)
+            except Exception as e:
+                logger.debug(f"[东财] {secid} trends2 失败: {e}")
+
+            if df is None or df.empty:
+                df = trends
+            elif trends is not None and not trends.empty and len(trends) > len(df):
+                logger.debug(
+                    f"[东财] {secid} 1分钟: trends2 {len(trends)} 条 > "
+                    f"kline {len(df)} 条，采用 trends2")
+                df = trends
         else:
             df = self._get_kline(secid, KLT_MAP[ktype], adjust)
 
