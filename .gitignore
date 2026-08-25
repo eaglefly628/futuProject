@@ -28,9 +28,13 @@ env/
 
 # OpenD 安装包（二进制，不入库）
 opend/
+FutuOpenD/
 *.dmg
 *.exe
 *.msi
+
+# 本地配置（账号密码等敏感信息）
+config/local.yaml
 
 # 临时文件
 temp/

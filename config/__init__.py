@@ -27,8 +27,55 @@ class Config:
             self._config = yaml.safe_load(f)
         self._config_path = str(path)
         self._base_dir = path.parent.parent
+
+        # 合并本地覆盖配置(local.yaml, 已 gitignore, 存放账号密码等敏感项)
+        self._local_path = path.parent / "local.yaml"
+        if self._local_path.exists():
+            try:
+                with open(self._local_path, "r", encoding="utf-8") as f:
+                    local = yaml.safe_load(f) or {}
+                self._deep_merge(self._config, local)
+                logger.info(f"本地配置已合并: {self._local_path}")
+            except Exception as e:
+                logger.warning(f"本地配置加载失败: {e}")
+
         self._resolve_paths()
         logger.info(f"配置加载完成: {config_path}")
+
+    @staticmethod
+    def _deep_merge(base: dict, override: dict):
+        """递归合并 override 到 base"""
+        for k, v in override.items():
+            if isinstance(v, dict) and isinstance(base.get(k), dict):
+                Config._deep_merge(base[k], v)
+            else:
+                base[k] = v
+
+    def save_local(self, data: dict):
+        """
+        保存敏感配置到 config/local.yaml (已 gitignore)。
+        会与现有 local.yaml 合并而非覆盖。
+        """
+        path = getattr(self, "_local_path", None)
+        if path is None:
+            path = Path(self._config_path).parent / "local.yaml"
+            self._local_path = path
+
+        existing = {}
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    existing = yaml.safe_load(f) or {}
+            except Exception:
+                existing = {}
+
+        self._deep_merge(existing, data)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.dump(existing, f, allow_unicode=True, default_flow_style=False)
+        # 同步到运行时配置
+        self._deep_merge(self._config, data)
+        logger.info(f"本地配置已保存: {path}")
 
     def _resolve_paths(self):
         path_keys = [

@@ -4,6 +4,12 @@ opend:
   port: 11111
   is_encrypt: false
   rsa_key_path: ""
+  # OpenD 可执行文件路径，留空则自动在 FutuOpenD/ 目录下查找
+  exe_path: ""
+  # 账号密码请勿写在这里！在 GUI「连接管理」中填写并勾选「记住」，
+  # 会保存到 config/local.yaml（已 gitignore，不会提交）
+  account: ""
+  pwd_md5: ""
 
 storage:
   db_type: "sqlite"
