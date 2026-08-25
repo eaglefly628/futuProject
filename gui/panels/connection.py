@@ -442,30 +442,48 @@ class ConnectionPanel(BasePanel):
                     "OpenD 启动后端口未就绪。请查看下方终端输出，"
                     "必要时在终端里直接输命令处理。")
 
-            # 端口开了不等于登录完成。未登录时 connect_quote() 会一直挂着，
-            # 所以先等登录确认，超时就把原因说清楚。
-            worker.progress.emit("等待 OpenD 登录...")
-            login_deadline = time.time() + 60
-            while time.time() < login_deadline:
-                if launcher.logged_in:
-                    break
-                if launcher.needs_verify:
+            # 端口开了不代表登录完成。不去猜 stdout —— OpenD 的交互输出可能走它
+            # 自己的 TTY 窗口，我们的管道根本收不到。直接试着建连接，
+            # 连得上就是真的就绪。
+            worker.progress.emit("等待 OpenD 登录（可在下方或 OpenD 窗口完成）...")
+            from core.client import FutuClient
+
+            deadline = time.time() + 120
+            attempt = 0
+            last_err = None
+            while time.time() < deadline:
+                if launcher.needs_verify and not launcher.logged_in:
                     raise RuntimeError("__NEED_VERIFY__")
                 if not launcher.is_running():
                     raise RuntimeError("OpenD 进程已退出，请查看终端输出")
-                time.sleep(0.5)
-            else:
-                raise RuntimeError(
-                    "等待登录超时。OpenD 端口已开但未确认登录成功。\n"
-                    "请查看下方终端输出：若提示需要验证码，"
-                    "在输入框执行 input_phone_verify_code -code=你的验证码；\n"
-                    "若账号密码有误，请更正后重试。")
 
-            worker.progress.emit("登录成功，正在连接 API...")
-            from core.client import FutuClient
-            client = FutuClient(host=host, port=port)
-            client.connect_quote()
-            return client
+                attempt += 1
+                try:
+                    client = FutuClient(host=host, port=port)
+                    client.connect_quote()
+                    # 拉一次全局状态确认服务真的可用（未登录时这里会失败）
+                    ret, _ = client.quote_ctx.get_global_state()
+                    if ret == 0:      # RET_OK
+                        worker.progress.emit("连接成功")
+                        return client
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    last_err = e
+
+                if attempt % 5 == 1:
+                    worker.progress.emit(
+                        f"OpenD 尚未就绪，重试中...（已等待 "
+                        f"{int(time.time() - (deadline - 120))}s，请完成登录）")
+                time.sleep(3)
+
+            raise RuntimeError(
+                f"等待超时（2分钟）。OpenD 端口已开但 API 不可用。\n"
+                f"最后一次错误: {last_err}\n\n"
+                f"若 OpenD 正提示输入账号密码，请在其窗口或下方终端完成登录；\n"
+                f"登录完成后点「🔗 仅连接」即可。")
 
         worker._func = do_launch
         self._worker = worker
@@ -546,6 +564,16 @@ class ConnectionPanel(BasePanel):
             from core.client import FutuClient
             client = FutuClient(host=host, port=port)
             client.connect_quote()
+            # 建连接不代表 OpenD 已登录，拉一次全局状态确认服务真的可用
+            ret, data = client.quote_ctx.get_global_state()
+            if ret != 0:      # RET_OK
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"OpenD 有响应但服务不可用: {data}\n"
+                    f"通常是尚未登录 —— 请在 OpenD 窗口完成登录后重试。")
             return client
 
         self._worker = WorkerThread(do_connect)
