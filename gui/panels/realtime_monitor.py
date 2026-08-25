@@ -25,6 +25,7 @@ class RealtimeMonitorPanel(BasePanel):
     def __init__(self, main_window):
         super().__init__(main_window, "实时行情", "实时监控股票行情数据和价格预警")
         self._quote_subscriber = None
+        self._tencent = None
         self._watched_codes = []  # 当前监控的股票代码列表
         self._timer = None
         self._build()
@@ -227,17 +228,32 @@ class RealtimeMonitorPanel(BasePanel):
         if not self._watched_codes:
             return
 
-        # 获取行情数据
+        # 按市场分流：A股走腾讯（免费，不需要 OpenD），港美股走 Futu
+        from downloaders.akshare_source import is_a_share
+        a_codes = [c for c in self._watched_codes if is_a_share(c)]
+        other_codes = [c for c in self._watched_codes if not is_a_share(c)]
+
         quotes = {}
-        if self._main.is_connected and self._main.client:
+
+        # A股 —— 腾讯实时行情
+        if a_codes:
             try:
-                # 使用 QuoteSubscriber 或直接通过 client 获取快照
+                if self._tencent is None:
+                    from downloaders.tencent_quote import TencentQuoteClient
+                    self._tencent = TencentQuoteClient()
+                quotes.update(self._tencent.get_quotes(a_codes))
+            except Exception as e:
+                logger.warning(f"腾讯行情获取失败: {e}")
+
+        # 港美股 —— Futu OpenD
+        if other_codes and self._main.is_connected and self._main.client:
+            try:
                 if self._quote_subscriber is None:
                     from core.quote_subscriber import QuoteSubscriber
                     self._quote_subscriber = QuoteSubscriber(self._main.client)
-                quotes = self._quote_subscriber.get_snapshot(self._watched_codes)
+                quotes.update(self._quote_subscriber.get_snapshot(other_codes))
             except Exception as e:
-                logger.warning(f"获取实时行情失败: {e}")
+                logger.warning(f"Futu 行情获取失败: {e}")
 
         # 更新行情表格
         self._update_quote_table(quotes)
