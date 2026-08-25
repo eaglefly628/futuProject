@@ -409,7 +409,8 @@ class A500CenterPanel(BasePanel):
             return
 
         self._chart.set_data(df)
-        self._status_label.setText(f"{code} {ktype} · {len(df):,} 条")
+        src = self._main.router.source_name(code) if self._main.router else "—"
+        self._status_label.setText(f"{code} {ktype} · {len(df):,} 条 · 源: {src}")
 
     def _refresh_coverage(self):
         """刷新数据覆盖表"""
@@ -433,10 +434,6 @@ class A500CenterPanel(BasePanel):
 
     # ─── 数据采集 ───
     def _on_fetch(self):
-        if not self._main.is_connected:
-            QMessageBox.warning(self, "未连接", "请先在「连接管理」中连接 Futu OpenD")
-            return
-
         ktypes = [kt for kt, cb in self._ktype_checks.items() if cb.isChecked()]
         if not ktypes:
             QMessageBox.warning(self, "未选择", "请至少选择一个采集周期")
@@ -444,6 +441,25 @@ class A500CenterPanel(BasePanel):
 
         scope = self._scope_combo.currentData()
         codes = [self._current_code()] if scope == "current" else [c for c, _ in A500_ETFS]
+
+        # A股走 akshare(免费,无需OpenD)，港美股才需要 Futu 连接
+        from downloaders.akshare_source import is_a_share
+        router = self._main.router
+        need_futu = [c for c in codes if not is_a_share(c)]
+
+        if router is None or (router.akshare is None and
+                              any(is_a_share(c) for c in codes)):
+            QMessageBox.warning(
+                self, "缺少数据源",
+                "A股数据源 akshare 不可用。\n\n请安装:  pip install akshare")
+            return
+
+        if need_futu and not self._main.is_connected:
+            QMessageBox.warning(
+                self, "未连接",
+                f"以下标的需要 Futu OpenD 连接:\n{', '.join(need_futu)}\n\n"
+                f"请先在「连接管理」中连接。")
+            return
 
         self._fetch_btn.setEnabled(False)
         self._fetch_log.clear()
@@ -455,19 +471,17 @@ class A500CenterPanel(BasePanel):
         worker = WorkerThread(lambda: None)
 
         def do_fetch():
-            downloader = self._main.kline_dl
-            if downloader is None:
-                raise RuntimeError("K线下载器未初始化，请重新连接 OpenD")
-
             done = 0
             total_records = 0
             for code in codes:
+                src_name = router.source_name(code)
+                worker.progress.emit(f"── {code}  数据源: {src_name} ──")
                 for kt in ktypes:
                     days = lookback_map.get(kt, 90)
                     start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
                     end = datetime.now().strftime("%Y-%m-%d")
                     try:
-                        n = downloader.download_history(
+                        n = router.download_history(
                             code=code, ktype_str=kt,
                             start_date=start, end_date=end, incremental=True)
                         total_records += n

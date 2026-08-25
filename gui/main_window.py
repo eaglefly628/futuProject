@@ -54,6 +54,8 @@ class MainWindow(QMainWindow):
         self.quote_sub = None
         self.paper_engine = None
         self.strategy_engine = None
+        self.akshare_src = None   # A股免费数据源(不依赖 OpenD)
+        self.router = None        # 市场路由: A股->akshare, 港美股->Futu
         self._connected = False
 
         self._init_backend()
@@ -72,6 +74,18 @@ class MainWindow(QMainWindow):
 
         from analysis.basic_stats import BasicAnalyzer
         self.analyzer = BasicAnalyzer(self.db)
+
+        # A股免费数据源(东方财富) —— 不依赖 OpenD，可独立采集
+        try:
+            from downloaders.akshare_source import AkshareSource
+            self.akshare_src = AkshareSource(self.db, self.config)
+        except ImportError:
+            self.akshare_src = None
+
+        # 市场路由: A股 -> akshare, 港美股 -> Futu
+        from downloaders.akshare_source import MarketRouter
+        self.router = MarketRouter(futu_downloader=None,
+                                   akshare_source=self.akshare_src)
 
     def _build_ui(self):
         """构建界面"""

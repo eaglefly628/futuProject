@@ -461,6 +461,10 @@ class ConnectionPanel(BasePanel):
         self._main.kline_dl = KlineDownloader(client, self._main.db, self._main.config)
         self._main.tick_cl = TickCollector(client, self._main.db, self._main.config)
 
+        # 把 Futu 下载器挂到市场路由上（A股仍走 akshare）
+        if self._main.router is not None:
+            self._main.router.futu = self._main.kline_dl
+
         from core.quote_subscriber import QuoteSubscriber
         from trading.fee_calculator import FeeCalculator
         from trading.paper_engine import PaperEngine
