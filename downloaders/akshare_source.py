@@ -36,12 +36,31 @@ def _is_retriable(exc: Exception) -> bool:
     text = f"{type(exc).__name__}: {exc}"
     return any(h.lower() in text.lower() for h in RETRIABLE_HINTS)
 
-try:
-    import akshare as ak
-    AKSHARE_AVAILABLE = True
-except ImportError:
-    AKSHARE_AVAILABLE = False
-    logger.debug("akshare 未安装，A股免费数据源不可用: pip install akshare")
+# akshare 依赖树很大，import 要十几秒，放到真正用到时再加载，
+# 否则会拖慢 GUI 启动（看起来像卡死）
+_ak = None
+_ak_loaded = False
+
+
+def _get_ak():
+    """懒加载 akshare，返回模块或 None"""
+    global _ak, _ak_loaded
+    if _ak_loaded:
+        return _ak
+    _ak_loaded = True
+    try:
+        import akshare as ak
+        _ak = ak
+        logger.info("akshare 已加载")
+    except ImportError:
+        _ak = None
+        logger.debug("akshare 未安装，A股回退源不可用: pip install akshare")
+    return _ak
+
+
+def akshare_available() -> bool:
+    """探测 akshare 是否可用（会触发一次加载）"""
+    return _get_ak() is not None
 
 
 # 本项目 ktype -> akshare 分钟线 period 参数
@@ -119,7 +138,7 @@ class AkshareSource:
             logger.warning(f"东财直连不可用: {e}")
             self._em = None
 
-        if self._em is None and not AKSHARE_AVAILABLE:
+        if self._em is None and not akshare_available():
             raise ImportError(
                 "无可用A股数据源。请安装依赖:  pip install requests akshare")
 
@@ -220,8 +239,9 @@ class AkshareSource:
             except Exception as e:
                 logger.warning(f"[东财直连] {bare} {ktype_str} 失败({type(e).__name__})，回退 akshare")
 
-        if not AKSHARE_AVAILABLE:
-            raise RuntimeError("东财直连失败且 akshare 不可用")
+        ak = _get_ak()
+        if ak is None:
+            raise RuntimeError("东财直连失败，且 akshare 未安装")
 
         self._pace()
         etf = is_etf_code(bare)
