@@ -115,9 +115,23 @@ futuProject/
 3. akshare               兜底，懒加载（import 很慢，别在启动时加载）
 ```
 
-命中的源记在 `src.last_source`。
+命中的源记在 `src.last_source`，失败原因记在 `src.last_error`（GUI 靠它显示「为什么 0 条」）。
 
 `MarketRouter` 按市场分流：A 股 → AkshareSource，港美股 → Futu。
+
+**也可以手动指定源**，绕过自动回退。三个采集面板（K线下载 / 批量下载 /
+A500中心）都有「数据源」下拉，选项来自 `MarketRouter.SOURCE_OPTIONS`：
+
+| key | 说明 |
+|-----|------|
+| `auto` | 按市场自动路由 + 依次回退（默认） |
+| `eastmoney` | 只用东财，失败不回退 —— 方便定位问题 |
+| `yahoo` | 只用 Yahoo（挂代理时通常是这条通） |
+| `akshare` | 只用 akshare 兜底 |
+| `futu` | 强制走 Futu（A 股会因无权限失败，属预期） |
+
+指定具体源时**不会静默换源**，这样报出来的错就是那个源的真实错误。
+调用侧一路透传 `prefer=` 参数：`router.download_history(..., prefer="yahoo")`。
 
 ### 实时行情
 
@@ -146,9 +160,25 @@ futuProject/
 - **Yahoo 对当日未完成/停牌的 K 线返回 `null`**，只过滤 `close` 不够，
   OHLC 任一缺失都要整行丢弃，并校验 high/low 是否包住 open/close。
 
+### 数据源路由
+
+- **采集面板不要直连 `main.kline_dl`（Futu），要走 `main.router`。**
+  写死 Futu 的话，A 股标的会撞上「无权限」返回 0 条。K线下载/批量下载两个面板
+  以前就是这么写的，现象是「✅ 下载完成！共 0 条记录」—— 绿色成功，实则啥也没拿到。
+- **0 条不是成功。** 下载器返回 0 时要能说清原因，否则用户只能看到一个 0。
+  现在 `AkshareSource` / `KlineDownloader` / `MarketRouter` 都带 `last_error`，
+  面板据此显示原因 + 一条可照做的建议（换源、装依赖、改周期）。
+- **「要不要连 OpenD」应该按实际路由判断**，不是一进面板就拦。
+  A 股走免费源根本不需要 OpenD，用 `router.requires_futu(code, prefer)` 判断。
+
 ### 网络
 
 - **东财的 `requests.get()` 不带 User-Agent 会被直接断连**。必须带完整浏览器头。
+- **`_fetch` 里把所有源的异常都 catch 掉，外层的重试退避就失效了。**
+  原来只有 akshare 路径的异常能触发重试，东财限流/连接重置其实从没退避过。
+  现在的做法是：所有源试完一轮后，若全失败且其中有瞬时错误（`RETRIABLE_HINTS`），
+  才抛给外层退避重试。**不能在东财失败时立刻抛** —— auto 模式下东财在本机常年
+  ProxyError，先抛的话每次都要空退避 4 轮才轮得到 Yahoo。
 - **akshare 的分钟线接口会先调 `get_market_id()` 多打一次请求**，
   所以我们自己拼 `secid`（`SH→1.`、`SZ→0.`），零额外请求。
 - **所有国内源默认绕过系统代理**（`trust_env=False` + `proxies={}`），
@@ -175,6 +205,15 @@ futuProject/
 - **图表绘制不要用 `df.iloc[i]`** —— 每次构造 Series，5000 根时 196ms。
   改成 numpy 数组后 1.8ms（106 倍）。可见窗口做了缓存，见 `chart.py:_ensure_cache`。
 - **akshare 必须懒加载**，模块级 import 会让 GUI 启动卡十几秒。
+- **勾选框禁用另一个控件时，一定要写明为什么。** 「自动计算起始日期」会 disable
+  「开始日期」，没提示的话看起来就像是坏了 / 不能改。现在下面有一行动态说明，
+  直接算出这次实际会从哪天开始拉。
+
+### 诊断
+
+- **结论要按「有没有源能用」下，不是「东财通不通」。** doctor 以前东财不通就报
+  「A股数据无法下载」，但用户机器上 Yahoo 是通的，结论是错的。现在
+  `Report.a_share_ok` / `usable_sources` 汇总所有源，并直接告诉用户该选哪个。
 
 ---
 
@@ -212,6 +251,7 @@ python -m scripts.diagnose               # Futu API 权限诊断
 ## 十、当前未解决的问题
 
 1. **东财在用户机器上不可达**（ProxyError）。已用 Yahoo 绕过，
-   但东财的分钟线历史更长，如果用户改了代理规则可以切回去。
+   但东财的分钟线历史更长，如果用户改了代理规则可以切回去 ——
+   现在下载面板的「数据源」下拉可以直接切，不用改代码。
 2. **1 分钟线历史都很短**，免费源普遍如此。要长历史只能付费或自己积累。
 3. **用户 Futu 账号无 A 股权限**，A 股永远走不了 Futu 这条路，除非他去买行情权限。

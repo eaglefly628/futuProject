@@ -301,6 +301,19 @@ class A500CenterPanel(BasePanel):
         self._scope_combo.addItem("当前选中标的", "current")
         self._scope_combo.addItem(f"全部 {len(A500_ETFS)} 只 A500 ETF", "all")
         code_row.addWidget(self._scope_combo)
+
+        code_row.addSpacing(16)
+        code_row.addWidget(QLabel("数据源:"))
+        self._source_combo = QComboBox()
+        from downloaders.akshare_source import MarketRouter
+        for key, label, tip in MarketRouter.SOURCE_OPTIONS:
+            self._source_combo.addItem(label, key)
+            self._source_combo.setItemData(
+                self._source_combo.count() - 1, tip, Qt.ToolTipRole)
+        self._source_combo.setMinimumWidth(150)
+        self._source_combo.currentIndexChanged.connect(self._refresh_chart)
+        code_row.addWidget(self._source_combo)
+
         code_row.addStretch()
 
         self._fetch_btn = self.make_primary_btn("⬇️ 开始采集", self._on_fetch)
@@ -417,7 +430,8 @@ class A500CenterPanel(BasePanel):
             return
 
         self._chart.set_data(df)
-        src = self._main.router.source_name(code) if self._main.router else "—"
+        prefer = self._source_combo.currentData() or "auto"
+        src = self._main.router.source_name(code, prefer) if self._main.router else "—"
         self._status_label.setText(f"{code} {ktype} · {len(df):,} 条 · 源: {src}")
 
     def _refresh_coverage(self):
@@ -450,10 +464,12 @@ class A500CenterPanel(BasePanel):
         scope = self._scope_combo.currentData()
         codes = [self._current_code()] if scope == "current" else [c for c, _ in A500_ETFS]
 
-        # A股走 akshare(免费,无需OpenD)，港美股才需要 Futu 连接
+        # A股走免费源(无需OpenD)，港美股才需要 Futu 连接
         from downloaders.akshare_source import is_a_share
         router = self._main.router
-        need_futu = [c for c in codes if not is_a_share(c)]
+        prefer = self._source_combo.currentData() or "auto"
+        need_futu = ([c for c in codes if router.requires_futu(c, prefer)]
+                     if router else codes)
 
         if router is None or (router.akshare is None and
                               any(is_a_share(c) for c in codes)):
@@ -482,7 +498,7 @@ class A500CenterPanel(BasePanel):
             done = 0
             total_records = 0
             for code in codes:
-                src_name = router.source_name(code)
+                src_name = router.source_name(code, prefer)
                 worker.progress.emit(f"── {code}  数据源: {src_name} ──")
                 for kt in ktypes:
                     days = lookback_map.get(kt, 90)
@@ -491,9 +507,16 @@ class A500CenterPanel(BasePanel):
                     try:
                         n = router.download_history(
                             code=code, ktype_str=kt,
-                            start_date=start, end_date=end, incremental=True)
+                            start_date=start, end_date=end, incremental=True,
+                            prefer=prefer)
                         total_records += n
-                        worker.progress.emit(f"{code} {kt}: {n} 条")
+                        if n > 0:
+                            hit = router.last_source or src_name
+                            worker.progress.emit(f"{code} {kt}: {n} 条  ({hit})")
+                        else:
+                            # 0 条要说明原因，不然只看到一串 0 无从下手
+                            why = router.last_error or "无数据"
+                            worker.progress.emit(f"{code} {kt}: 0 条 — {why}")
                     except Exception as e:
                         worker.progress.emit(f"{code} {kt}: 失败 - {e}")
                     done += 1
@@ -520,9 +543,16 @@ class A500CenterPanel(BasePanel):
 
     def _on_fetch_done(self, total):
         self._progress.setValue(100)
-        self._progress_label.setText(f"采集完成，共 {total:,} 条记录")
-        self._fetch_log.append(
-            f'<span style="color:{COLORS["green"]}">✅ 完成，共 {total:,} 条</span>')
+        if total > 0:
+            self._progress_label.setText(f"采集完成，共 {total:,} 条记录")
+            self._fetch_log.append(
+                f'<span style="color:{COLORS["green"]}">✅ 完成，共 {total:,} 条</span>')
+        else:
+            self._progress_label.setText("采集结束，但没有拿到数据")
+            self._fetch_log.append(
+                f'<span style="color:{COLORS["yellow"]}">'
+                f'⚠️ 一条都没拿到 —— 看上面每行末尾的原因，'
+                f'或把「数据源」换一个再试</span>')
         self._fetch_btn.setEnabled(True)
         self._refresh_coverage()
         self._refresh_chart()

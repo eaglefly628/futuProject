@@ -79,6 +79,18 @@ DAY_PERIOD_MAP = {
     "K_MON": "monthly",
 }
 
+# 可选数据源（GUI 下拉直接用这张表）
+#   key          显示名               说明
+SOURCE_OPTIONS = [
+    ("auto",      "自动（依次回退）",   "东财 → Yahoo → akshare，哪个通用哪个"),
+    ("eastmoney", "东财直连",          "国内网络最好，分钟线历史最全；挂代理时常被拦"),
+    ("yahoo",     "Yahoo",             "海外网络/挂代理时可通；60分钟约2年，1分钟仅7天"),
+    ("akshare",   "akshare",           "兜底源，首次调用要加载依赖，较慢"),
+]
+SOURCE_KEYS = [k for k, _, _ in SOURCE_OPTIONS]
+SOURCE_LABELS = {k: n for k, n, _ in SOURCE_OPTIONS}
+
+
 # akshare 中文列 -> 本项目 schema
 COLUMN_MAP = {
     "时间": "time_key",
@@ -129,7 +141,8 @@ class AkshareSource:
         self.interval = max(MIN_GAP,
                             float(config.get("kline", "request_interval", default=0.8)))
         self._last_call = 0.0
-        self.last_source = ""
+        self.last_source = ""      # 上次命中的源（东财/Yahoo/akshare）
+        self.last_error = ""       # 上次失败原因，给 GUI 展示用
 
         # 东财直连（主路径，需要国内网络）
         try:
@@ -162,7 +175,7 @@ class AkshareSource:
     # ═══════════════════════════════════════
     def download_history(self, code: str, ktype_str: str,
                          start_date: str = None, end_date: str = None,
-                         incremental: bool = True) -> int:
+                         incremental: bool = True, prefer: str = "auto") -> int:
         """
         下载 A 股 K 线并落库。
 
@@ -172,12 +185,24 @@ class AkshareSource:
             start_date: YYYY-MM-DD，None 则按配置回溯
             end_date: YYYY-MM-DD，None 则今天
             incremental: 增量模式，从库中最新时间续
+            prefer: 数据源，见 SOURCE_KEYS。"auto" 依次回退；
+                    指定具体源时只用那一个，失败不静默换源（便于定位问题）
 
         Returns:
-            落库条数
+            落库条数。失败/无数据返回 0，原因写在 self.last_error
         """
+        self.last_source = ""
+        self.last_error = ""
+
         if ktype_str not in MIN_PERIOD_MAP and ktype_str not in DAY_PERIOD_MAP:
-            logger.error(f"不支持的K线类型: {ktype_str}")
+            self.last_error = f"不支持的K线类型: {ktype_str}"
+            logger.error(self.last_error)
+            return 0
+
+        prefer = (prefer or "auto").lower()
+        if prefer not in SOURCE_KEYS:
+            self.last_error = f"未知数据源: {prefer}（可选 {'/'.join(SOURCE_KEYS)}）"
+            logger.error(self.last_error)
             return 0
 
         bare = to_bare_code(code)
@@ -199,14 +224,17 @@ class AkshareSource:
 
         df = None
         last_err = None
+        tries = 0
         for attempt in range(1, MAX_RETRIES + 1):
+            tries = attempt
             try:
                 df = self._fetch(bare, ktype_str, start_date, end_date,
-                                 code_full=code)
+                                 code_full=code, prefer=prefer)
                 break
             except Exception as e:
                 last_err = e
                 if attempt >= MAX_RETRIES or not _is_retriable(e):
+                    self.last_error = str(e)
                     logger.error(f"[akshare] 下载异常: {code} {ktype_str} - {e}")
                     self.db.log_download(code, "kline", ktype_str,
                                          start_date, end_date, 0, "error", str(e))
@@ -218,16 +246,21 @@ class AkshareSource:
                     f"{wait:.1f}s 后重试")
                 time.sleep(wait)
 
-        if df is None:
-            logger.error(f"[akshare] 重试耗尽: {code} {ktype_str} - {last_err}")
-            self.db.log_download(code, "kline", ktype_str, start_date, end_date,
-                                 0, "error", str(last_err))
-            return 0
-
         if df is None or df.empty:
-            logger.info(f"[akshare] 无数据: {code} {ktype_str}")
+            if last_err is not None:
+                # 真的抛异常并重试到底了
+                self.last_error = f"重试 {tries} 次仍失败: {last_err}"
+                logger.error(f"[akshare] 重试耗尽: {code} {ktype_str} - {last_err}")
+                self.db.log_download(code, "kline", ktype_str, start_date, end_date,
+                                     0, "error", str(last_err))
+                return 0
+
+            # _fetch 已把每个源的失败/空原因写进 last_error，别覆盖它
+            if not self.last_error:
+                self.last_error = "数据源返回空（该周期无数据，或代码不存在/未上市）"
+            logger.info(f"[akshare] 无数据: {code} {ktype_str} - {self.last_error}")
             self.db.log_download(code, "kline", ktype_str, start_date, end_date,
-                                 0, "success", "无数据")
+                                 0, "success", self.last_error)
             return 0
 
         saved = self.db.save_kline(code, ktype_str, df)
@@ -239,35 +272,85 @@ class AkshareSource:
     # ─── 实际抓取 ───
     def _fetch(self, bare: str, ktype_str: str,
                start_date: str, end_date: str,
-               code_full: str = "") -> Optional[pd.DataFrame]:
+               code_full: str = "", prefer: str = "auto") -> Optional[pd.DataFrame]:
+        """
+        按 prefer 抓取。"auto" 时依次回退，指定源时只试那一个。
+
+        每个源失败/空的原因都收集起来，最后写进 self.last_error，
+        否则 GUI 只能看到「0 条」，没法判断是网络挡了还是本来就没数据。
+        """
+        notes = []
+        retriable = False
+        only = None if prefer == "auto" else prefer
+
+        def _note(src, msg, exc=None):
+            nonlocal retriable
+            notes.append(f"{src}: {msg}")
+            if exc is not None and _is_retriable(exc):
+                retriable = True
+
         # 1) 东财直连（国内网络时最好，分钟线历史最全）
-        if self._em is not None:
-            try:
-                df = self._em.get_kline(bare, ktype_str, start_date, end_date)
-                if df is not None and not df.empty:
-                    self.last_source = "东财"
-                    return self._normalize_em(df)
-                logger.debug(f"[东财] {bare} {ktype_str} 无数据，尝试下一个源")
-            except Exception as e:
-                logger.warning(
-                    f"[东财] {bare} {ktype_str} 失败({type(e).__name__})，尝试下一个源")
+        if only in (None, "eastmoney"):
+            if self._em is None:
+                _note("东财", "客户端不可用")
+            else:
+                try:
+                    df = self._em.get_kline(bare, ktype_str, start_date, end_date)
+                    if df is not None and not df.empty:
+                        self.last_source = "东财"
+                        return self._normalize_em(df)
+                    _note("东财", "无数据")
+                    logger.debug(f"[东财] {bare} {ktype_str} 无数据，尝试下一个源")
+                except Exception as e:
+                    _note("东财", f"{type(e).__name__}: {e}", e)
+                    logger.warning(
+                        f"[东财] {bare} {ktype_str} 失败({type(e).__name__})，尝试下一个源")
 
         # 2) Yahoo（挂海外代理时这条通）
-        if self._yahoo is not None:
-            try:
-                df = self._yahoo.get_kline(code_full, ktype_str, start_date, end_date)
-                if df is not None and not df.empty:
-                    self.last_source = "Yahoo"
-                    return df        # YahooClient 已按本项目 schema 返回
-                logger.debug(f"[Yahoo] {bare} {ktype_str} 无数据，尝试下一个源")
-            except Exception as e:
-                logger.warning(
-                    f"[Yahoo] {bare} {ktype_str} 失败({type(e).__name__})，尝试下一个源")
+        if only in (None, "yahoo"):
+            if self._yahoo is None:
+                _note("Yahoo", "客户端不可用")
+            else:
+                try:
+                    df = self._yahoo.get_kline(code_full, ktype_str, start_date, end_date)
+                    if df is not None and not df.empty:
+                        self.last_source = "Yahoo"
+                        return df        # YahooClient 已按本项目 schema 返回
+                    _note("Yahoo", "无数据")
+                    logger.debug(f"[Yahoo] {bare} {ktype_str} 无数据，尝试下一个源")
+                except Exception as e:
+                    _note("Yahoo", f"{type(e).__name__}: {e}", e)
+                    logger.warning(
+                        f"[Yahoo] {bare} {ktype_str} 失败({type(e).__name__})，尝试下一个源")
 
-        ak = _get_ak()
-        if ak is None:
-            raise RuntimeError("东财直连失败，且 akshare 未安装")
+        # 3) akshare（兜底，import 很慢，只在真正轮到它时加载）
+        if only in (None, "akshare"):
+            ak = _get_ak()
+            if ak is None:
+                _note("akshare", "未安装（pip install akshare）")
+            else:
+                try:
+                    df = self._fetch_akshare(ak, bare, ktype_str,
+                                             start_date, end_date)
+                    if df is not None and not df.empty:
+                        self.last_source = "akshare"
+                        return df
+                    _note("akshare", "无数据")
+                except Exception as e:
+                    _note("akshare", f"{type(e).__name__}: {e}", e)
 
+        self.last_error = "；".join(notes) if notes else "所有数据源均无数据"
+
+        # 所有源都没拿到，且其中有连接被重置这类瞬时错误 -> 抛给外层退避重试。
+        # 注意要等所有源都试完再抛：auto 模式下东财常年 ProxyError，
+        # 先抛的话每次都要空退避 4 轮才轮得到 Yahoo。
+        if retriable:
+            raise ConnectionError(self.last_error)
+        return None
+
+    def _fetch_akshare(self, ak, bare: str, ktype_str: str,
+                       start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+        """akshare 兜底路径"""
         self._pace()
         etf = is_etf_code(bare)
 
@@ -356,19 +439,21 @@ class AkshareSource:
 
     # ─── 批量 ───
     def download_all_types(self, code: str, ktypes: List[str] = None,
-                           incremental: bool = True) -> dict:
+                           incremental: bool = True, prefer: str = "auto") -> dict:
         if ktypes is None:
             ktypes = self.config.get("kline", "default_types",
                                      default=["K_5M", "K_DAY"])
-        return {kt: self.download_history(code, kt, incremental=incremental)
+        return {kt: self.download_history(code, kt, incremental=incremental,
+                                          prefer=prefer)
                 for kt in ktypes}
 
     def batch_download(self, codes: List[str], ktypes: List[str] = None,
-                       incremental: bool = True) -> dict:
+                       incremental: bool = True, prefer: str = "auto") -> dict:
         results = {}
         for code in codes:
             logger.info(f"[akshare] ===== 批量下载: {code} =====")
-            results[code] = self.download_all_types(code, ktypes, incremental)
+            results[code] = self.download_all_types(code, ktypes, incremental,
+                                                    prefer=prefer)
         return results
 
 
@@ -378,29 +463,85 @@ class MarketRouter:
 
       A 股 (SH./SZ.)  -> AkshareSource   免费，无权限限制
       港股/美股       -> KlineDownloader Futu OpenAPI
+
+    也可以用 prefer 手动指定，绕过自动路由：
+      "auto"      按市场自动选（默认）
+      "futu"      强制走 Futu（A 股账号无行情权限时会失败，属预期）
+      其余 key    强制走 A 股源里的某一个，见 SOURCE_OPTIONS
     """
+
+    # GUI 下拉用：在 A 股源之上补一个「Futu」
+    SOURCE_OPTIONS = SOURCE_OPTIONS + [
+        ("futu", "Futu OpenAPI", "港股/美股走这条；A 股需要账号有对应行情权限"),
+    ]
+    SOURCE_KEYS = [k for k, _, _ in SOURCE_OPTIONS]
+    SOURCE_LABELS = {k: n for k, n, _ in SOURCE_OPTIONS}
 
     def __init__(self, futu_downloader=None, akshare_source=None):
         self.futu = futu_downloader
         self.akshare = akshare_source
+        self.last_source = ""
+        self.last_error = ""
 
-    def pick(self, code: str):
+    def pick(self, code: str, prefer: str = "auto"):
         """返回该标的应使用的下载器，无可用源时返回 None"""
+        prefer = (prefer or "auto").lower()
+        if prefer == "futu":
+            return self.futu
+        if prefer != "auto":
+            # 指定了具体的 A 股源
+            return self.akshare
         if is_a_share(code) and self.akshare is not None:
             return self.akshare
         return self.futu
 
-    def source_name(self, code: str) -> str:
-        src = self.pick(code)
+    def source_name(self, code: str, prefer: str = "auto") -> str:
+        src = self.pick(code, prefer)
         if src is None:
             return "无可用数据源"
-        return "akshare(东财)" if src is self.akshare else "Futu OpenAPI"
+        if src is self.akshare:
+            prefer = (prefer or "auto").lower()
+            return "A股源(自动)" if prefer == "auto" else f"A股源({SOURCE_LABELS.get(prefer, prefer)})"
+        return "Futu OpenAPI"
+
+    def requires_futu(self, code: str, prefer: str = "auto") -> bool:
+        """这次下载是否需要 OpenD 已连接"""
+        return self.pick(code, prefer) is self.futu
 
     def download_history(self, code: str, ktype_str: str,
                          start_date: str = None, end_date: str = None,
-                         incremental: bool = True) -> int:
-        src = self.pick(code)
+                         incremental: bool = True, prefer: str = "auto") -> int:
+        self.last_source = ""
+        self.last_error = ""
+
+        prefer = (prefer or "auto").lower()
+        src = self.pick(code, prefer)
         if src is None:
-            logger.error(f"无可用数据源: {code}")
+            self.last_error = (
+                "Futu 未连接（侧栏 → 连接管理）" if prefer == "futu"
+                else f"无可用数据源: {code}")
+            logger.error(f"无可用数据源: {code} (prefer={prefer})")
             return 0
-        return src.download_history(code, ktype_str, start_date, end_date, incremental)
+
+        if src is self.akshare:
+            n = src.download_history(code, ktype_str, start_date, end_date,
+                                     incremental, prefer=prefer)
+        else:
+            # Futu 侧不认 prefer，直接调
+            n = src.download_history(code, ktype_str, start_date, end_date,
+                                     incremental)
+
+        self.last_source = getattr(src, "last_source", "") or self.source_name(code, prefer)
+        self.last_error = getattr(src, "last_error", "")
+        return n
+
+    def download_all_types(self, code: str, ktypes: List[str] = None,
+                           incremental: bool = True, prefer: str = "auto") -> dict:
+        return {kt: self.download_history(code, kt, incremental=incremental,
+                                          prefer=prefer)
+                for kt in (ktypes or ["K_DAY"])}
+
+    def batch_download(self, codes: List[str], ktypes: List[str] = None,
+                       incremental: bool = True, prefer: str = "auto") -> dict:
+        return {code: self.download_all_types(code, ktypes, incremental, prefer)
+                for code in codes}

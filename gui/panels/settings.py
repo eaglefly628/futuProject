@@ -195,15 +195,22 @@ class SettingsPanel(BasePanel):
 
         # A股能不能拉，直接给结论
         if self._diag_net_check.isChecked():
-            if rep.eastmoney_ok:
+            if rep.a_share_ok:
+                srcs = " / ".join(rep.usable_sources)
                 html.append(
                     f'<div style="color:{COLORS["green"]};margin-top:6px">'
-                    f'<b>A股数据源可用</b> —— 可直接在「A500中心 → 数据采集」开始采集</div>')
+                    f'<b>A股数据源可用（{srcs}）</b> —— '
+                    f'可直接在「A500中心 → 数据采集」开始采集</div>')
+                if not rep.eastmoney_ok:
+                    html.append(
+                        f'<div style="color:{COLORS["yellow"]}">'
+                        f'东财不可达，但 Yahoo 通；采集时把「数据源」选 '
+                        f'<b>Yahoo</b> 或 <b>自动</b> 即可</div>')
             else:
                 html.append(
                     f'<div style="color:{COLORS["red"]};margin-top:6px">'
-                    f'<b>东财不可访问</b> —— A股数据无法下载，'
-                    f'需检查网络或改用其他行情源</div>')
+                    f'<b>东财与 Yahoo 均不可访问</b> —— A股数据无法下载，'
+                    f'需检查网络/代理设置</div>')
 
         self._diag_out.setHtml("".join(html))
         self._diag_status.setText("检测完成")

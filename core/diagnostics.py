@@ -42,9 +42,25 @@ class Report:
     missing_required: List[str] = field(default_factory=list)
     missing_optional: List[str] = field(default_factory=list)
     eastmoney_ok: bool = False
+    yahoo_ok: bool = False
 
     def add(self, section: str, check: Check):
         self.sections.setdefault(section, []).append(check)
+
+    @property
+    def a_share_ok(self) -> bool:
+        """A 股能不能拉 —— 任一免费源通即可，不是只看东财"""
+        return self.eastmoney_ok or self.yahoo_ok
+
+    @property
+    def usable_sources(self) -> List[str]:
+        """当前实测可用的 A 股源，按推荐顺序"""
+        out = []
+        if self.eastmoney_ok:
+            out.append("东财直连")
+        if self.yahoo_ok:
+            out.append("Yahoo")
+        return out
 
     @property
     def can_run(self) -> bool:
@@ -203,10 +219,37 @@ def run_diagnostics(progress: Optional[Callable[[str], None]] = None,
                 except Exception:
                     pass
 
-        if not rep.eastmoney_ok:
+        # Yahoo —— 挂海外代理时通常是它通，是当前的主力路径，必须一起测
+        step("测试 Yahoo...")
+        try:
+            from downloaders.yahoo import YahooClient
+            t = time.perf_counter()
+            df = YahooClient(min_gap=0).get_kline("SZ.159338", "K_DAY")
+            cost = time.perf_counter() - t
+            if df is not None and not df.empty:
+                rep.yahoo_ok = True
+                rep.add("行情源", Check(
+                    "Yahoo", OK,
+                    f"{cost:.1f}s · 返回 {len(df):,} 条 · "
+                    f"最新 {str(df['time_key'].iloc[-1])[:20]}"))
+            else:
+                rep.add("行情源", Check(
+                    "Yahoo", WARN, "有响应但无数据"))
+        except Exception as e:
             rep.add("行情源", Check(
-                "结论", FAIL, "两种方式均不可用",
-                "关闭 VPN/代理后重试，或改用其他行情源"))
+                "Yahoo", FAIL, f"{type(e).__name__}: {str(e)[:90]}"))
+
+        # 结论看的是「有没有源能用」，不是「东财通不通」
+        if rep.a_share_ok:
+            srcs = " / ".join(rep.usable_sources)
+            rep.add("行情源", Check(
+                "结论", OK, f"A股可采集，可用源: {srcs}",
+                f"在下载面板把「数据源」选成 {rep.usable_sources[0]} 最稳；"
+                f"选「自动」也会命中它"))
+        else:
+            rep.add("行情源", Check(
+                "结论", FAIL, "东财与 Yahoo 均不可用",
+                "关闭 VPN/代理后重试；或装 akshare 作兜底: pip install akshare"))
 
     step("完成")
     return rep

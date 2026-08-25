@@ -44,14 +44,20 @@ class KlineDownloadPanel(BasePanel):
         for val, label in KTYPE_OPTIONS:
             self._ktype_combo.addItem(f"{label} ({val})", val)
         self._ktype_combo.setCurrentIndex(6)  # 默认日K
+        self._ktype_combo.currentIndexChanged.connect(
+            lambda _: self._refresh_date_hint())
         grid.addWidget(self._ktype_combo, 0, 3)
 
         # 开始日期
         grid.addWidget(QLabel("开始日期"), 1, 0)
         self._start_date = QDateEdit()
         self._start_date.setCalendarPopup(True)
+        # 默认三个月，但允许一路翻到 1990，回溯多久由用户定
+        self._start_date.setMinimumDate(QDate(1990, 1, 1))
+        self._start_date.setMaximumDate(QDate.currentDate())
         self._start_date.setDate(QDate.currentDate().addMonths(-3))
         self._start_date.setDisplayFormat("yyyy-MM-dd")
+        self._start_date.dateChanged.connect(lambda _: self._refresh_date_hint())
         grid.addWidget(self._start_date, 1, 1)
 
         # 结束日期
@@ -62,6 +68,22 @@ class KlineDownloadPanel(BasePanel):
         self._end_date.setDisplayFormat("yyyy-MM-dd")
         grid.addWidget(self._end_date, 1, 3)
 
+        # 数据源
+        grid.addWidget(QLabel("数据源"), 2, 0)
+        self._source_combo = QComboBox()
+        from downloaders.akshare_source import MarketRouter
+        for key, label, tip in MarketRouter.SOURCE_OPTIONS:
+            self._source_combo.addItem(label, key)
+            self._source_combo.setItemData(
+                self._source_combo.count() - 1, tip, Qt.ToolTipRole)
+        self._source_combo.currentIndexChanged.connect(self._on_source_changed)
+        grid.addWidget(self._source_combo, 2, 1)
+
+        self._source_hint = QLabel()
+        self._source_hint.setWordWrap(True)
+        self._source_hint.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        grid.addWidget(self._source_hint, 2, 2, 1, 2)
+
         layout.addLayout(grid)
 
         # 选项行
@@ -69,13 +91,26 @@ class KlineDownloadPanel(BasePanel):
         opt_row.setContentsMargins(0, 0, 0, 0)
         self._incr_check = QCheckBox("增量模式（从上次断点继续）")
         self._incr_check.setChecked(True)
+        self._incr_check.setToolTip(
+            "只补库里最新一条之后的数据。要往前回溯更早的历史，请取消勾选。")
+        self._incr_check.toggled.connect(lambda _: self._refresh_date_hint())
         opt_row.addWidget(self._incr_check)
+
         self._auto_date_check = QCheckBox("自动计算起始日期")
         self._auto_date_check.setChecked(True)
+        self._auto_date_check.setToolTip(
+            "勾选时按配置的回溯天数自动算起点，「开始日期」不可编辑。\n"
+            "取消勾选即可自己指定起点，最早可选到 1990-01-01。")
         self._auto_date_check.toggled.connect(self._on_auto_date_toggle)
         opt_row.addWidget(self._auto_date_check)
         opt_row.addStretch()
         layout.addLayout(opt_row)
+
+        # 说明当前这组选项实际会从哪天开始拉，省得用户猜
+        self._date_hint = QLabel()
+        self._date_hint.setWordWrap(True)
+        self._date_hint.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        layout.addWidget(self._date_hint)
 
         # 操作按钮
         btn_row = QHBoxLayout()
@@ -107,17 +142,65 @@ class KlineDownloadPanel(BasePanel):
 
         self.add_stretch()
         self._on_auto_date_toggle(True)
+        self._on_source_changed()
+        self._refresh_date_hint()
 
     def _on_auto_date_toggle(self, checked):
         self._start_date.setEnabled(not checked)
+        self._refresh_date_hint()
+
+    def _refresh_date_hint(self):
+        """把「这次实际从哪天开始拉」算出来显示，别让用户猜"""
+        from datetime import datetime, timedelta
+
+        ktype = self._ktype_combo.currentData()
+        auto = self._auto_date_check.isChecked()
+        incr = self._incr_check.isChecked()
+
+        if not auto:
+            start = self._start_date.date().toString("yyyy-MM-dd")
+            self._date_hint.setText(
+                f"起点: {start}（手动指定，会覆盖增量模式）")
+            return
+
+        days = self._main.config.get("kline", "lookback_days", ktype, default=90)
+        auto_start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        if incr:
+            self._date_hint.setText(
+                f"起点: 库里最新一条之后；库里没有数据时回溯 {days} 天（{auto_start}）。"
+                f"　要往前补更早的历史，取消「自动计算起始日期」并选一个更早的开始日期。")
+        else:
+            self._date_hint.setText(
+                f"起点: {auto_start}（{ktype} 自动回溯 {days} 天）。"
+                f"　想拉更早，取消「自动计算起始日期」自己选。")
+
+    def _on_source_changed(self):
+        """下拉切换时显示该源的适用说明"""
+        from downloaders.akshare_source import MarketRouter
+        key = self._source_combo.currentData()
+        tip = dict((k, t) for k, _, t in MarketRouter.SOURCE_OPTIONS).get(key, "")
+        self._source_hint.setText(tip)
 
     def _on_start(self):
         code = self._code_input.text().strip()
         if not code:
             QMessageBox.warning(self, "提示", "请输入股票代码")
             return
-        if not self._main.is_connected:
-            QMessageBox.warning(self, "提示", "请先连接Futu OpenD（侧栏 → 连接管理）")
+
+        router = self._main.router
+        if router is None:
+            QMessageBox.warning(self, "提示", "数据源未初始化")
+            return
+
+        prefer = self._source_combo.currentData() or "auto"
+
+        # 只有真要走 Futu 才需要 OpenD；A 股走免费源，不该被这道检查拦住
+        if router.requires_futu(code, prefer) and not self._main.is_connected:
+            QMessageBox.warning(
+                self, "提示",
+                "这次下载要走 Futu OpenAPI，请先连接 OpenD（侧栏 → 连接管理）。\n"
+                "如果是 A 股标的，把「数据源」改成自动或东财/Yahoo 即可免连接。")
             return
 
         ktype = self._ktype_combo.currentData()
@@ -126,13 +209,16 @@ class KlineDownloadPanel(BasePanel):
         incr = self._incr_check.isChecked()
 
         self._log.clear()
-        self._log_msg(f"开始下载: {code} | {ktype} | 增量: {incr}")
+        self._log_msg(f"开始下载: {code} | {ktype} | 增量: {incr} | "
+                      f"数据源: {router.source_name(code, prefer)}")
         self._set_running(True)
 
-        self._worker = WorkerThread(
-            self._main.kline_dl.download_history,
-            code, ktype, start, end, incr
-        )
+        def do_download():
+            n = router.download_history(code, ktype, start, end, incr, prefer=prefer)
+            # 把命中的源和失败原因一起带回来，否则界面只能看到一个 0
+            return n, router.last_source, router.last_error
+
+        self._worker = WorkerThread(do_download)
         self._worker.finished_ok.connect(self._on_done)
         self._worker.error.connect(self._on_error)
         self._worker.start()
@@ -143,11 +229,43 @@ class KlineDownloadPanel(BasePanel):
             self._log_msg("⚠️ 已手动停止")
         self._set_running(False)
 
-    def _on_done(self, count):
-        self._log_msg(f"✅ 下载完成！共 {count} 条记录")
-        self._main.log(f"K线下载完成: {self._code_input.text()} → {count} 条")
+    def _on_done(self, result):
+        count, source, error = result
+        code = self._code_input.text().strip()
+
+        if count > 0:
+            self._log_msg(f"✅ 下载完成！共 {count} 条记录"
+                          + (f" · 实际来源: {source}" if source else ""))
+            self._main.log(f"K线下载完成: {code} → {count} 条")
+        else:
+            # 0 条不是成功。报清楚是哪个源、卡在哪
+            self._log_msg(f"⚠️ 没有拿到数据（0 条）")
+            if error:
+                self._log_msg(f"原因: {error}")
+            self._log_msg(self._hint_for(code, error))
+            self._main.log(f"K线下载无数据: {code} - {error or '未知原因'}")
+
         self._main.refresh_status()
         self._set_running(False)
+
+    def _hint_for(self, code: str, error: str) -> str:
+        """按失败原因给一条能直接照做的建议"""
+        from downloaders.akshare_source import is_a_share
+        err = (error or "")
+
+        if "无权限" in err:
+            return ("提示: Futu 账号没有该标的的行情权限。A 股请把「数据源」"
+                    "换成自动 / 东财 / Yahoo，这些不需要权限。")
+        if "Proxy" in err or "proxy" in err:
+            return ("提示: 该源被系统代理挡住了。换成 Yahoo 再试 —— "
+                    "挂日本代理时通常是它能通。")
+        if is_a_share(code) and "无数据" in err and "Yahoo" in err:
+            return ("提示: 免费源的分钟线历史很短（东财约 5 天、Yahoo 7 天）。"
+                    "拉长历史请改用 60 分钟或日线。")
+        if "未安装" in err:
+            return "提示: 该源缺依赖，按报错里的 pip 命令装上再试。"
+        return ("提示: 换一个数据源再试；仍不行就跑 "
+                "python -m scripts.test_em <代码> 看各周期能否拉到。")
 
     def _on_error(self, msg):
         self._log_msg(f"❌ 下载失败: {msg}")

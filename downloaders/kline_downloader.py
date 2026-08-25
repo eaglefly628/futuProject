@@ -37,6 +37,8 @@ class KlineDownloader:
         self.config = config
         self.max_count = config.get("kline", "max_count_per_request", default=1000)
         self.interval = config.get("kline", "request_interval", default=0.5)
+        self.last_source = "Futu OpenAPI"
+        self.last_error = ""       # 上次失败原因，给 GUI 展示用
 
     def download_history(self, code: str, ktype_str: str,
                          start_date: str = None, end_date: str = None,
@@ -54,8 +56,11 @@ class KlineDownloader:
         Returns:
             下载的记录总数
         """
+        self.last_error = ""
+
         if ktype_str not in KTYPE_MAP:
-            logger.error(f"不支持的K线类型: {ktype_str}")
+            self.last_error = f"不支持的K线类型: {ktype_str}"
+            logger.error(self.last_error)
             return 0
 
         ktype = KTYPE_MAP[ktype_str]
@@ -97,6 +102,7 @@ class KlineDownloader:
                 )
 
                 if ret != RET_OK:
+                    self.last_error = str(data)
                     logger.error(f"请求失败: {data}")
                     retry_count += 1
                     if retry_count >= max_retries:
@@ -132,6 +138,7 @@ class KlineDownloader:
                 time.sleep(self.interval)
 
             except Exception as e:
+                self.last_error = f"{type(e).__name__}: {e}"
                 logger.error(f"下载异常: {code} {ktype_str} - {e}")
                 retry_count += 1
                 if retry_count >= max_retries:
@@ -143,10 +150,13 @@ class KlineDownloader:
                 time.sleep(self.interval * 3)
 
         if total_saved > 0:
+            self.last_error = ""
             self.db.log_download(
                 code, "kline", ktype_str, start_date, end_date,
                 total_saved, "success"
             )
+        elif not self.last_error:
+            self.last_error = "Futu 返回空数据（该周期无数据，或代码不存在/未上市）"
         logger.info(f"下载完成: {code} {ktype_str} -> 共 {total_saved} 条")
         return total_saved
 

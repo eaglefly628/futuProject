@@ -1,6 +1,6 @@
 """批量下载面板"""
 from PySide6.QtWidgets import (
-    QHBoxLayout, QVBoxLayout, QLabel, QCheckBox,
+    QHBoxLayout, QVBoxLayout, QLabel, QCheckBox, QComboBox,
     QProgressBar, QTextEdit, QTableWidget, QTableWidgetItem,
     QHeaderView, QMessageBox
 )
@@ -37,6 +37,16 @@ class BatchDownloadPanel(BasePanel):
         self._incr_check = QCheckBox("增量模式")
         self._incr_check.setChecked(True)
         opt_row.addWidget(self._incr_check)
+        opt_row.addSpacing(16)
+        opt_row.addWidget(QLabel("数据源"))
+        self._source_combo = QComboBox()
+        from downloaders.akshare_source import MarketRouter
+        for key, label, tip in MarketRouter.SOURCE_OPTIONS:
+            self._source_combo.addItem(label, key)
+            self._source_combo.setItemData(
+                self._source_combo.count() - 1, tip, Qt.ToolTipRole)
+        self._source_combo.setMinimumWidth(160)
+        opt_row.addWidget(self._source_combo)
         opt_row.addStretch()
         layout.addLayout(opt_row)
 
@@ -89,8 +99,9 @@ class BatchDownloadPanel(BasePanel):
             self._stock_table.setItem(i, 1, QTableWidgetItem(c))
 
     def _on_start(self):
-        if not self._main.is_connected:
-            QMessageBox.warning(self, "提示", "请先连接Futu OpenD")
+        router = self._main.router
+        if router is None:
+            QMessageBox.warning(self, "提示", "数据源未初始化")
             return
         codes = self._main.config.get_watchlist_all()
         if not codes:
@@ -101,6 +112,18 @@ class BatchDownloadPanel(BasePanel):
             QMessageBox.warning(self, "提示", "请选择至少一种K线类型")
             return
 
+        prefer = self._source_combo.currentData() or "auto"
+
+        # 只有名单里真有标的要走 Futu 时，才要求 OpenD 已连接
+        futu_codes = [c for c in codes if router.requires_futu(c, prefer)]
+        if futu_codes and not self._main.is_connected:
+            QMessageBox.warning(
+                self, "提示",
+                f"名单里有 {len(futu_codes)} 只要走 Futu OpenAPI"
+                f"（{', '.join(futu_codes[:3])}{' 等' if len(futu_codes) > 3 else ''}），"
+                "请先连接 OpenD（侧栏 → 连接管理）。")
+            return
+
         self._log.clear()
         self._log.append(f"开始批量下载: {len(codes)} 只股票 × {len(ktypes)} 种K线")
         self._set_running(True)
@@ -109,8 +132,8 @@ class BatchDownloadPanel(BasePanel):
         self._progress.setVisible(True)
 
         self._worker = WorkerThread(
-            self._main.kline_dl.batch_download,
-            codes, ktypes, self._incr_check.isChecked()
+            router.batch_download,
+            codes, ktypes, self._incr_check.isChecked(), prefer
         )
         self._worker.finished_ok.connect(self._on_done)
         self._worker.error.connect(self._on_error)
@@ -123,10 +146,22 @@ class BatchDownloadPanel(BasePanel):
 
     def _on_done(self, results):
         total = sum(sum(v.values()) for v in results.values())
-        self._log.append(f'<span style="color:{COLORS["green"]}">✅ 批量下载完成！共 {total:,} 条记录</span>')
+        empty = [c for c, kt_res in results.items() if not sum(kt_res.values())]
+
+        if total > 0:
+            self._log.append(f'<span style="color:{COLORS["green"]}">'
+                             f'✅ 批量下载完成！共 {total:,} 条记录</span>')
+        else:
+            self._log.append(f'<span style="color:{COLORS["yellow"]}">'
+                             f'⚠️ 批量下载结束，但一条都没拿到</span>')
         for code, kt_res in results.items():
             s = ", ".join(f"{k}:{v}" for k, v in kt_res.items())
             self._log.append(f"  {code}: {s}")
+        if empty:
+            self._log.append(
+                f'<span style="color:{COLORS["yellow"]}">'
+                f'⚠️ {len(empty)} 只无数据: {", ".join(empty)} '
+                f'—— 换个数据源再试，或到「K线下载」单只下载看具体原因</span>')
         self._main.log(f"批量下载完成: {total:,} 条")
         self._main.refresh_status()
         self._set_running(False)

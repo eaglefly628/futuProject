@@ -27,10 +27,13 @@ def main():
     print()
 
     if check_net:
-        if rep.eastmoney_ok:
-            print("A股数据源可用 —— 可在「A500中心 → 数据采集」开始采集")
+        if rep.a_share_ok:
+            srcs = " / ".join(rep.usable_sources)
+            print(f"A股数据源可用（{srcs}）—— 可在「A500中心 → 数据采集」开始采集")
+            if not rep.eastmoney_ok:
+                print("  东财不可达，但 Yahoo 通；下载面板的「数据源」选 Yahoo 或自动即可")
         else:
-            print("东财不可访问 —— A股数据无法下载，需检查网络或改用其他行情源")
+            print("东财与 Yahoo 均不可访问 —— A股数据无法下载，需检查网络/代理")
     print()
 
     return 0 if rep.can_run else 1
