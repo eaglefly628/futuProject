@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 from loguru import logger
 
+from downloaders.cancel import (
+    StopFn, ProgressFn, stopped, report, sleep_unless_stopped)
+
 try:
     from futu import KLType, KL_FIELD, AuType, RET_OK
     FUTU_AVAILABLE = True
@@ -42,7 +45,9 @@ class KlineDownloader:
 
     def download_history(self, code: str, ktype_str: str,
                          start_date: str = None, end_date: str = None,
-                         incremental: bool = True) -> int:
+                         incremental: bool = True,
+                         should_stop: StopFn = None,
+                         on_progress: ProgressFn = None) -> int:
         """
         下载历史K线数据
 
@@ -52,11 +57,17 @@ class KlineDownloader:
             start_date: 开始日期 YYYY-MM-DD
             end_date: 结束日期 YYYY-MM-DD
             incremental: 增量模式(从上次最后记录继续)
+            should_stop: 返回 True 时尽快停下，已落库的数据保留
+            on_progress: 进度消息回调
 
         Returns:
             下载的记录总数
         """
         self.last_error = ""
+
+        if stopped(should_stop):
+            self.last_error = "已停止"
+            return 0
 
         if ktype_str not in KTYPE_MAP:
             self.last_error = f"不支持的K线类型: {ktype_str}"
@@ -87,7 +98,14 @@ class KlineDownloader:
         retry_count = 0
         max_retries = 3
 
+        page = 0
         while True:
+            if stopped(should_stop):
+                logger.info(f"已停止: {code} {ktype_str}，已保存 {total_saved} 条")
+                self.last_error = "已停止"
+                break
+
+            page += 1
             try:
                 ret, data, page_req_key = self.client.quote_ctx.request_history_kline(
                     code=code,
@@ -111,7 +129,9 @@ class KlineDownloader:
                             total_saved, "error", str(data)
                         )
                         break
-                    time.sleep(self.interval * 2)
+                    if sleep_unless_stopped(self.interval * 2, should_stop):
+                        self.last_error = "已停止"
+                        break
                     continue
 
                 retry_count = 0
@@ -128,6 +148,9 @@ class KlineDownloader:
                     f"本批 {len(data)}条 | 累计 {total_saved}条 | "
                     f"范围 {data['time_key'].iloc[0]} ~ {data['time_key'].iloc[-1]}"
                 )
+                report(on_progress,
+                       f"  第{page}页: +{len(data)} 条，累计 {total_saved} 条 "
+                       f"（至 {str(data['time_key'].iloc[-1])[:16]}）")
 
                 # 如果返回的数据不足max_count, 说明已到最后
                 if len(data) < self.max_count:
@@ -135,7 +158,9 @@ class KlineDownloader:
 
                 # 下一页: 用最后一条记录的时间
                 page_start = str(data["time_key"].iloc[-1])[:10]
-                time.sleep(self.interval)
+                if sleep_unless_stopped(self.interval, should_stop):
+                    self.last_error = "已停止"
+                    break
 
             except Exception as e:
                 self.last_error = f"{type(e).__name__}: {e}"
@@ -147,7 +172,9 @@ class KlineDownloader:
                         total_saved, "error", str(e)
                     )
                     break
-                time.sleep(self.interval * 3)
+                if sleep_unless_stopped(self.interval * 3, should_stop):
+                    self.last_error = "已停止"
+                    break
 
         if total_saved > 0:
             self.last_error = ""
@@ -157,27 +184,44 @@ class KlineDownloader:
             )
         elif not self.last_error:
             self.last_error = "Futu 返回空数据（该周期无数据，或代码不存在/未上市）"
+
+        if total_saved > 0 and stopped(should_stop):
+            self.last_error = "已停止"
         logger.info(f"下载完成: {code} {ktype_str} -> 共 {total_saved} 条")
         return total_saved
 
     def download_all_types(self, code: str, ktypes: List[str] = None,
-                           incremental: bool = True) -> dict:
+                           incremental: bool = True,
+                           should_stop: StopFn = None,
+                           on_progress: ProgressFn = None) -> dict:
         """下载指定股票的所有K线类型"""
         if ktypes is None:
             ktypes = self.config.get("kline", "default_types", default=["K_1M", "K_DAY"])
         results = {}
         for kt in ktypes:
-            count = self.download_history(code, kt, incremental=incremental)
+            if stopped(should_stop):
+                break
+            count = self.download_history(code, kt, incremental=incremental,
+                                          should_stop=should_stop,
+                                          on_progress=on_progress)
             results[kt] = count
-            time.sleep(self.interval)
+            if sleep_unless_stopped(self.interval, should_stop):
+                break
         return results
 
     def batch_download(self, codes: List[str], ktypes: List[str] = None,
-                       incremental: bool = True) -> dict:
+                       incremental: bool = True,
+                       should_stop: StopFn = None,
+                       on_progress: ProgressFn = None) -> dict:
         """批量下载多只股票的K线数据"""
         results = {}
         for code in codes:
+            if stopped(should_stop):
+                break
             logger.info(f"========== 批量下载: {code} ==========")
-            results[code] = self.download_all_types(code, ktypes, incremental)
-            time.sleep(self.interval * 2)
+            results[code] = self.download_all_types(
+                code, ktypes, incremental,
+                should_stop=should_stop, on_progress=on_progress)
+            if sleep_unless_stopped(self.interval * 2, should_stop):
+                break
         return results

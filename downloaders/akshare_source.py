@@ -14,6 +14,9 @@ from typing import Optional, List
 import pandas as pd
 from loguru import logger
 
+from downloaders.cancel import (
+    StopFn, ProgressFn, stopped, report, sleep_unless_stopped)
+
 # 东方财富会限流，需要重试 + 退避
 MAX_RETRIES = 4
 BASE_BACKOFF = 1.5      # 秒，指数退避基数
@@ -164,18 +167,22 @@ class AkshareSource:
             raise ImportError(
                 "无可用A股数据源。请安装依赖:  pip install requests")
 
-    def _pace(self):
-        """限流：保证相邻请求之间有最小间隔"""
+    def _pace(self, should_stop: StopFn = None) -> bool:
+        """限流：保证相邻请求之间有最小间隔。返回 True 表示被要求停止"""
         elapsed = time.time() - self._last_call
         gap = self.interval + random.uniform(0, 0.4)
+        halted = False
         if elapsed < gap:
-            time.sleep(gap - elapsed)
+            halted = sleep_unless_stopped(gap - elapsed, should_stop)
         self._last_call = time.time()
+        return halted
 
     # ═══════════════════════════════════════
     def download_history(self, code: str, ktype_str: str,
                          start_date: str = None, end_date: str = None,
-                         incremental: bool = True, prefer: str = "auto") -> int:
+                         incremental: bool = True, prefer: str = "auto",
+                         should_stop: StopFn = None,
+                         on_progress: ProgressFn = None) -> int:
         """
         下载 A 股 K 线并落库。
 
@@ -187,12 +194,18 @@ class AkshareSource:
             incremental: 增量模式，从库中最新时间续
             prefer: 数据源，见 SOURCE_KEYS。"auto" 依次回退；
                     指定具体源时只用那一个，失败不静默换源（便于定位问题）
+            should_stop: 返回 True 时尽快停下，已落库的数据保留
+            on_progress: 进度消息回调
 
         Returns:
             落库条数。失败/无数据返回 0，原因写在 self.last_error
         """
         self.last_source = ""
         self.last_error = ""
+
+        if stopped(should_stop):
+            self.last_error = "已停止"
+            return 0
 
         if ktype_str not in MIN_PERIOD_MAP and ktype_str not in DAY_PERIOD_MAP:
             self.last_error = f"不支持的K线类型: {ktype_str}"
@@ -229,7 +242,8 @@ class AkshareSource:
             tries = attempt
             try:
                 df = self._fetch(bare, ktype_str, start_date, end_date,
-                                 code_full=code, prefer=prefer)
+                                 code_full=code, prefer=prefer,
+                                 should_stop=should_stop, on_progress=on_progress)
                 break
             except Exception as e:
                 last_err = e
@@ -244,7 +258,11 @@ class AkshareSource:
                 logger.warning(
                     f"[akshare] {code} {ktype_str} 第{attempt}次失败({type(e).__name__})，"
                     f"{wait:.1f}s 后重试")
-                time.sleep(wait)
+                report(on_progress,
+                       f"  {code} {ktype_str}: 第{attempt}次失败，{wait:.0f}s 后重试")
+                if sleep_unless_stopped(wait, should_stop):
+                    self.last_error = "已停止"
+                    return 0
 
         if df is None or df.empty:
             if last_err is not None:
@@ -272,7 +290,9 @@ class AkshareSource:
     # ─── 实际抓取 ───
     def _fetch(self, bare: str, ktype_str: str,
                start_date: str, end_date: str,
-               code_full: str = "", prefer: str = "auto") -> Optional[pd.DataFrame]:
+               code_full: str = "", prefer: str = "auto",
+               should_stop: StopFn = None,
+               on_progress: ProgressFn = None) -> Optional[pd.DataFrame]:
         """
         按 prefer 抓取。"auto" 时依次回退，指定源时只试那一个。
 
@@ -290,11 +310,12 @@ class AkshareSource:
                 retriable = True
 
         # 1) 东财直连（国内网络时最好，分钟线历史最全）
-        if only in (None, "eastmoney"):
+        if only in (None, "eastmoney") and not stopped(should_stop):
             if self._em is None:
                 _note("东财", "客户端不可用")
             else:
                 try:
+                    report(on_progress, f"  试 东财 …")
                     df = self._em.get_kline(bare, ktype_str, start_date, end_date)
                     if df is not None and not df.empty:
                         self.last_source = "东财"
@@ -307,11 +328,12 @@ class AkshareSource:
                         f"[东财] {bare} {ktype_str} 失败({type(e).__name__})，尝试下一个源")
 
         # 2) Yahoo（挂海外代理时这条通）
-        if only in (None, "yahoo"):
+        if only in (None, "yahoo") and not stopped(should_stop):
             if self._yahoo is None:
                 _note("Yahoo", "客户端不可用")
             else:
                 try:
+                    report(on_progress, f"  试 Yahoo …")
                     df = self._yahoo.get_kline(code_full, ktype_str, start_date, end_date)
                     if df is not None and not df.empty:
                         self.last_source = "Yahoo"
@@ -324,20 +346,25 @@ class AkshareSource:
                         f"[Yahoo] {bare} {ktype_str} 失败({type(e).__name__})，尝试下一个源")
 
         # 3) akshare（兜底，import 很慢，只在真正轮到它时加载）
-        if only in (None, "akshare"):
+        if only in (None, "akshare") and not stopped(should_stop):
+            report(on_progress, "  试 akshare（首次要加载依赖，较慢）…")
             ak = _get_ak()
             if ak is None:
                 _note("akshare", "未安装（pip install akshare）")
             else:
                 try:
                     df = self._fetch_akshare(ak, bare, ktype_str,
-                                             start_date, end_date)
+                                             start_date, end_date, should_stop)
                     if df is not None and not df.empty:
                         self.last_source = "akshare"
                         return df
                     _note("akshare", "无数据")
                 except Exception as e:
                     _note("akshare", f"{type(e).__name__}: {e}", e)
+
+        if stopped(should_stop):
+            self.last_error = "已停止"
+            return None
 
         self.last_error = "；".join(notes) if notes else "所有数据源均无数据"
 
@@ -349,9 +376,11 @@ class AkshareSource:
         return None
 
     def _fetch_akshare(self, ak, bare: str, ktype_str: str,
-                       start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+                       start_date: str, end_date: str,
+                       should_stop: StopFn = None) -> Optional[pd.DataFrame]:
         """akshare 兜底路径"""
-        self._pace()
+        if self._pace(should_stop):
+            return None
         etf = is_etf_code(bare)
 
         if ktype_str in MIN_PERIOD_MAP:
@@ -439,21 +468,34 @@ class AkshareSource:
 
     # ─── 批量 ───
     def download_all_types(self, code: str, ktypes: List[str] = None,
-                           incremental: bool = True, prefer: str = "auto") -> dict:
+                           incremental: bool = True, prefer: str = "auto",
+                           should_stop: StopFn = None,
+                           on_progress: ProgressFn = None) -> dict:
         if ktypes is None:
             ktypes = self.config.get("kline", "default_types",
                                      default=["K_5M", "K_DAY"])
-        return {kt: self.download_history(code, kt, incremental=incremental,
-                                          prefer=prefer)
-                for kt in ktypes}
+        out = {}
+        for kt in ktypes:
+            if stopped(should_stop):
+                break
+            out[kt] = self.download_history(code, kt, incremental=incremental,
+                                            prefer=prefer,
+                                            should_stop=should_stop,
+                                            on_progress=on_progress)
+        return out
 
     def batch_download(self, codes: List[str], ktypes: List[str] = None,
-                       incremental: bool = True, prefer: str = "auto") -> dict:
+                       incremental: bool = True, prefer: str = "auto",
+                       should_stop: StopFn = None,
+                       on_progress: ProgressFn = None) -> dict:
         results = {}
         for code in codes:
+            if stopped(should_stop):
+                break
             logger.info(f"[akshare] ===== 批量下载: {code} =====")
-            results[code] = self.download_all_types(code, ktypes, incremental,
-                                                    prefer=prefer)
+            results[code] = self.download_all_types(
+                code, ktypes, incremental, prefer=prefer,
+                should_stop=should_stop, on_progress=on_progress)
         return results
 
 
@@ -510,7 +552,9 @@ class MarketRouter:
 
     def download_history(self, code: str, ktype_str: str,
                          start_date: str = None, end_date: str = None,
-                         incremental: bool = True, prefer: str = "auto") -> int:
+                         incremental: bool = True, prefer: str = "auto",
+                         should_stop: StopFn = None,
+                         on_progress: ProgressFn = None) -> int:
         self.last_source = ""
         self.last_error = ""
 
@@ -525,23 +569,42 @@ class MarketRouter:
 
         if src is self.akshare:
             n = src.download_history(code, ktype_str, start_date, end_date,
-                                     incremental, prefer=prefer)
+                                     incremental, prefer=prefer,
+                                     should_stop=should_stop,
+                                     on_progress=on_progress)
         else:
             # Futu 侧不认 prefer，直接调
             n = src.download_history(code, ktype_str, start_date, end_date,
-                                     incremental)
+                                     incremental, should_stop=should_stop,
+                                     on_progress=on_progress)
 
         self.last_source = getattr(src, "last_source", "") or self.source_name(code, prefer)
         self.last_error = getattr(src, "last_error", "")
         return n
 
     def download_all_types(self, code: str, ktypes: List[str] = None,
-                           incremental: bool = True, prefer: str = "auto") -> dict:
-        return {kt: self.download_history(code, kt, incremental=incremental,
-                                          prefer=prefer)
-                for kt in (ktypes or ["K_DAY"])}
+                           incremental: bool = True, prefer: str = "auto",
+                           should_stop: StopFn = None,
+                           on_progress: ProgressFn = None) -> dict:
+        out = {}
+        for kt in (ktypes or ["K_DAY"]):
+            if stopped(should_stop):
+                break
+            out[kt] = self.download_history(code, kt, incremental=incremental,
+                                            prefer=prefer,
+                                            should_stop=should_stop,
+                                            on_progress=on_progress)
+        return out
 
     def batch_download(self, codes: List[str], ktypes: List[str] = None,
-                       incremental: bool = True, prefer: str = "auto") -> dict:
-        return {code: self.download_all_types(code, ktypes, incremental, prefer)
-                for code in codes}
+                       incremental: bool = True, prefer: str = "auto",
+                       should_stop: StopFn = None,
+                       on_progress: ProgressFn = None) -> dict:
+        out = {}
+        for code in codes:
+            if stopped(should_stop):
+                break
+            out[code] = self.download_all_types(
+                code, ktypes, incremental, prefer,
+                should_stop=should_stop, on_progress=on_progress)
+        return out

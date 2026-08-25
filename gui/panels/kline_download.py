@@ -213,27 +213,42 @@ class KlineDownloadPanel(BasePanel):
                       f"数据源: {router.source_name(code, prefer)}")
         self._set_running(True)
 
-        def do_download():
-            n = router.download_history(code, ktype, start, end, incr, prefer=prefer)
-            # 把命中的源和失败原因一起带回来，否则界面只能看到一个 0
-            return n, router.last_source, router.last_error
+        worker = WorkerThread.deferred()
 
-        self._worker = WorkerThread(do_download)
-        self._worker.finished_ok.connect(self._on_done)
-        self._worker.error.connect(self._on_error)
-        self._worker.start()
+        def do_download():
+            n = router.download_history(
+                code, ktype, start, end, incr, prefer=prefer,
+                should_stop=worker.should_stop,
+                on_progress=worker.emit_progress)
+            # 把命中的源和失败原因一起带回来，否则界面只能看到一个 0
+            return n, router.last_source, router.last_error, worker.cancelled
+
+        worker.set_task(do_download)
+        self._worker = worker
+        worker.progress.connect(self._log_msg)
+        worker.finished_ok.connect(self._on_done)
+        worker.error.connect(self._on_error)
+        worker.start()
 
     def _on_stop(self):
-        if self._worker and self._worker.isRunning():
-            self._worker.terminate()
-            self._log_msg("⚠️ 已手动停止")
-        self._set_running(False)
+        if not (self._worker and self._worker.isRunning()):
+            return
+        self._worker.cancel()
+        # 不在这里 wait()，会卡住界面。线程自己收尾后走 _on_done
+        self._stop_btn.setEnabled(False)
+        self._stop_btn.setText("停止中…")
+        self._log_msg("⏹ 正在停止，等当前请求返回…")
 
     def _on_done(self, result):
-        count, source, error = result
+        count, source, error, cancelled = result
         code = self._code_input.text().strip()
 
-        if count > 0:
+        if cancelled:
+            self._log_msg(f"⏹ 已停止，本次已保存 {count} 条")
+            if count:
+                self._log_msg("已入库的数据会保留，下次开增量模式接着补即可")
+            self._main.log(f"K线下载已停止: {code} → {count} 条")
+        elif count > 0:
             self._log_msg(f"✅ 下载完成！共 {count} 条记录"
                           + (f" · 实际来源: {source}" if source else ""))
             self._main.log(f"K线下载完成: {code} → {count} 条")
@@ -275,13 +290,16 @@ class KlineDownloadPanel(BasePanel):
     def _set_running(self, running):
         self._start_btn.setEnabled(not running)
         self._stop_btn.setEnabled(running)
+        self._stop_btn.setText("⏹ 停止")
         self._progress_bar.setVisible(running)
 
     def _log_msg(self, msg):
         from datetime import datetime
         ts = datetime.now().strftime("%H:%M:%S")
         color = COLORS['text_secondary']
-        if "✅" in msg or "完成" in msg:
+        if "⏹" in msg:
+            color = COLORS['yellow']
+        elif "✅" in msg or "完成" in msg:
             color = COLORS['green']
         elif "❌" in msg or "失败" in msg:
             color = COLORS['red']

@@ -131,24 +131,52 @@ class BatchDownloadPanel(BasePanel):
         self._progress.setValue(0)
         self._progress.setVisible(True)
 
-        self._worker = WorkerThread(
-            router.batch_download,
-            codes, ktypes, self._incr_check.isChecked(), prefer
-        )
-        self._worker.finished_ok.connect(self._on_done)
-        self._worker.error.connect(self._on_error)
-        self._worker.start()
+        incr = self._incr_check.isChecked()
+        worker = WorkerThread.deferred()
+
+        def do_batch():
+            res = router.batch_download(
+                codes, ktypes, incr, prefer,
+                should_stop=worker.should_stop,
+                on_progress=worker.emit_progress)
+            return res, worker.cancelled
+
+        worker.set_task(do_batch)
+        self._worker = worker
+        worker.progress.connect(self._on_progress_msg)
+        worker.finished_ok.connect(self._on_done)
+        worker.error.connect(self._on_error)
+        worker.start()
 
     def _on_stop(self):
-        if self._worker and self._worker.isRunning():
-            self._worker.terminate()
-        self._set_running(False)
+        if not (self._worker and self._worker.isRunning()):
+            return
+        self._worker.cancel()
+        # 不在这里 wait()，会卡住界面。线程自己收尾后走 _on_done
+        self._stop_btn.setEnabled(False)
+        self._stop_btn.setText("停止中…")
+        self._log.append(f'<span style="color:{COLORS["yellow"]}">'
+                         f'⏹ 正在停止，等当前请求返回…</span>')
 
-    def _on_done(self, results):
+    def _on_progress_msg(self, msg: str):
+        """下载器发上来的逐步进度"""
+        self._log.append(f'<span style="color:{COLORS["text_secondary"]}">{msg}</span>')
+        done = self._progress.value() + 1
+        if done <= self._progress.maximum():
+            self._progress.setValue(done)
+
+    def _on_done(self, payload):
+        results, cancelled = payload
         total = sum(sum(v.values()) for v in results.values())
         empty = [c for c, kt_res in results.items() if not sum(kt_res.values())]
 
-        if total > 0:
+        if cancelled:
+            self._log.append(f'<span style="color:{COLORS["yellow"]}">'
+                             f'⏹ 已停止，本次已保存 {total:,} 条'
+                             f'（完成 {len(results)} 只）</span>')
+            self._log.append(f'<span style="color:{COLORS["text_secondary"]}">'
+                             f'已入库的数据保留，下次开增量模式接着补即可</span>')
+        elif total > 0:
             self._log.append(f'<span style="color:{COLORS["green"]}">'
                              f'✅ 批量下载完成！共 {total:,} 条记录</span>')
         else:
@@ -157,12 +185,13 @@ class BatchDownloadPanel(BasePanel):
         for code, kt_res in results.items():
             s = ", ".join(f"{k}:{v}" for k, v in kt_res.items())
             self._log.append(f"  {code}: {s}")
-        if empty:
+        if empty and not cancelled:
             self._log.append(
                 f'<span style="color:{COLORS["yellow"]}">'
                 f'⚠️ {len(empty)} 只无数据: {", ".join(empty)} '
                 f'—— 换个数据源再试，或到「K线下载」单只下载看具体原因</span>')
-        self._main.log(f"批量下载完成: {total:,} 条")
+        self._main.log(
+            f"批量下载{'已停止' if cancelled else '完成'}: {total:,} 条")
         self._main.refresh_status()
         self._set_running(False)
         self._progress.setValue(self._progress.maximum())
@@ -172,5 +201,6 @@ class BatchDownloadPanel(BasePanel):
         self._set_running(False)
 
     def _set_running(self, running):
+        self._stop_btn.setText("⏹ 停止")
         self._start_btn.setEnabled(not running)
         self._stop_btn.setEnabled(running)

@@ -316,8 +316,17 @@ class A500CenterPanel(BasePanel):
 
         code_row.addStretch()
 
+        self._incr_check = QCheckBox("增量模式")
+        self._incr_check.setChecked(True)
+        self._incr_check.setToolTip(
+            "只补库里最新一条之后的数据。取消勾选则按上面的周期天数整段重拉。")
+        code_row.addWidget(self._incr_check)
+
         self._fetch_btn = self.make_primary_btn("⬇️ 开始采集", self._on_fetch)
         code_row.addWidget(self._fetch_btn)
+        self._stop_btn = self.make_danger_btn("⏹ 停止", self._on_stop)
+        self._stop_btn.setEnabled(False)
+        code_row.addWidget(self._stop_btn)
         sel_layout.addLayout(code_row)
 
         layout.addWidget(sel_card)
@@ -485,30 +494,37 @@ class A500CenterPanel(BasePanel):
                 f"请先在「连接管理」中连接。")
             return
 
-        self._fetch_btn.setEnabled(False)
+        self._set_running(True)
         self._fetch_log.clear()
         self._progress.setValue(0)
 
+        incr = self._incr_check.isChecked()
         lookback_map = {kt: days for kt, _, days in KTYPE_LABELS}
         total_tasks = len(codes) * len(ktypes)
 
-        worker = WorkerThread(lambda: None)
+        worker = WorkerThread.deferred()
 
         def do_fetch():
             done = 0
             total_records = 0
             for code in codes:
+                if worker.should_stop():
+                    break
                 src_name = router.source_name(code, prefer)
                 worker.progress.emit(f"── {code}  数据源: {src_name} ──")
                 for kt in ktypes:
+                    if worker.should_stop():
+                        break
                     days = lookback_map.get(kt, 90)
                     start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
                     end = datetime.now().strftime("%Y-%m-%d")
                     try:
                         n = router.download_history(
                             code=code, ktype_str=kt,
-                            start_date=start, end_date=end, incremental=True,
-                            prefer=prefer)
+                            start_date=start, end_date=end, incremental=incr,
+                            prefer=prefer,
+                            should_stop=worker.should_stop,
+                            on_progress=worker.progress.emit)
                         total_records += n
                         if n > 0:
                             hit = router.last_source or src_name
@@ -521,10 +537,11 @@ class A500CenterPanel(BasePanel):
                         worker.progress.emit(f"{code} {kt}: 失败 - {e}")
                     done += 1
                     worker.progress.emit(f"__PROGRESS__{int(done / total_tasks * 100)}")
-                    time.sleep(0.3)
-            return total_records
+                    if worker.sleep_or_stop(0.3):
+                        break
+            return total_records, worker.cancelled
 
-        worker._func = do_fetch
+        worker.set_task(do_fetch)
         self._worker = worker
         worker.progress.connect(self._on_fetch_progress)
         worker.finished_ok.connect(self._on_fetch_done)
@@ -541,9 +558,31 @@ class A500CenterPanel(BasePanel):
         self._fetch_log.append(msg)
         self._progress_label.setText(msg)
 
-    def _on_fetch_done(self, total):
+    def _on_stop(self):
+        if not (self._worker and self._worker.isRunning()):
+            return
+        self._worker.cancel()
+        # 不在这里 wait()，会卡住界面。线程自己收尾后走 _on_fetch_done
+        self._stop_btn.setEnabled(False)
+        self._stop_btn.setText("停止中…")
+        self._fetch_log.append(f'<span style="color:{COLORS["yellow"]}">'
+                               f'⏹ 正在停止，等当前请求返回…</span>')
+
+    def _set_running(self, running):
+        self._fetch_btn.setEnabled(not running)
+        self._stop_btn.setEnabled(running)
+        self._stop_btn.setText("⏹ 停止")
+
+    def _on_fetch_done(self, payload):
+        total, cancelled = payload
         self._progress.setValue(100)
-        if total > 0:
+        if cancelled:
+            self._progress_label.setText(f"已停止，本次已保存 {total:,} 条")
+            self._fetch_log.append(
+                f'<span style="color:{COLORS["yellow"]}">'
+                f'⏹ 已停止，本次已保存 {total:,} 条 —— '
+                f'已入库的数据保留，下次开增量模式接着补</span>')
+        elif total > 0:
             self._progress_label.setText(f"采集完成，共 {total:,} 条记录")
             self._fetch_log.append(
                 f'<span style="color:{COLORS["green"]}">✅ 完成，共 {total:,} 条</span>')
@@ -553,7 +592,7 @@ class A500CenterPanel(BasePanel):
                 f'<span style="color:{COLORS["yellow"]}">'
                 f'⚠️ 一条都没拿到 —— 看上面每行末尾的原因，'
                 f'或把「数据源」换一个再试</span>')
-        self._fetch_btn.setEnabled(True)
+        self._set_running(False)
         self._refresh_coverage()
         self._refresh_chart()
         self._main.refresh_status()
@@ -561,7 +600,7 @@ class A500CenterPanel(BasePanel):
     def _on_fetch_error(self, msg: str):
         self._fetch_log.append(f'<span style="color:{COLORS["red"]}">❌ {msg}</span>')
         self._progress_label.setText("采集失败")
-        self._fetch_btn.setEnabled(True)
+        self._set_running(False)
 
     # ─── 量价分析 ───
     def _on_analyze(self):

@@ -119,6 +119,9 @@ futuProject/
 
 `MarketRouter` 按市场分流：A 股 → AkshareSource，港美股 → Futu。
 
+采集类方法统一带两个可选参数，一路透传到最底层：
+`should_stop`（返回 True 就尽快停）和 `on_progress`（逐步进度回调）。
+
 **也可以手动指定源**，绕过自动回退。三个采集面板（K线下载 / 批量下载 /
 A500中心）都有「数据源」下拉，选项来自 `MarketRouter.SOURCE_OPTIONS`：
 
@@ -129,6 +132,9 @@ A500中心）都有「数据源」下拉，选项来自 `MarketRouter.SOURCE_OPT
 | `yahoo` | 只用 Yahoo（挂代理时通常是这条通） |
 | `akshare` | 只用 akshare 兜底 |
 | `futu` | 强制走 Futu（A 股会因无权限失败，属预期） |
+
+三个采集面板的控件已对齐，都有：数据源下拉、增量模式、停止按钮、
+逐步进度、0 条/停止的原因说明。
 
 指定具体源时**不会静默换源**，这样报出来的错就是那个源的真实错误。
 调用侧一路透传 `prefer=` 参数：`router.download_history(..., prefer="yahoo")`。
@@ -159,6 +165,17 @@ A500中心）都有「数据源」下拉，选项来自 `MarketRouter.SOURCE_OPT
   必须 `list(...)` 转换。这个 bug 表现为「某根 K 线的最高价低于开盘价」。
 - **Yahoo 对当日未完成/停牌的 K 线返回 `null`**，只过滤 `close` 不够，
   OHLC 任一缺失都要整行丢弃，并校验 high/low 是否包住 open/close。
+
+### 停止 / 取消
+
+- **不要用 `QThread.terminate()` 停任务。** 线程阻塞在 socket 上时它根本不生效
+  （点了停止没反应），真生效了又可能停在 SQLite 写一半的位置。
+  统一走 `downloaders/cancel.py` 的协作式取消：任务在循环点查 `should_stop()`，
+  自己收尾返回。已落库的数据保留不回滚 —— 采集是增量去重的，下次接着补。
+- **退避 sleep 必须可打断。** 指数退避动辄十几秒，`time.sleep` 硬睡的话
+  点了停止要等它睡完。用 `sleep_unless_stopped()` 分片等待。
+- **停止时不要 `wait()`**，会卡住界面。按钮置灰改成「停止中…」，
+  线程自己收尾后走正常的完成回调。
 
 ### 数据源路由
 
