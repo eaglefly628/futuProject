@@ -111,8 +111,17 @@ class AkshareSource:
                             float(config.get("kline", "request_interval", default=0.8)))
         self._last_call = 0.0
 
-        if not AKSHARE_AVAILABLE:
-            raise ImportError("请先安装 akshare:  pip install akshare")
+        # 东财直连客户端（主路径）
+        try:
+            from downloaders.eastmoney import EastmoneyClient
+            self._em = EastmoneyClient(min_gap=self.interval)
+        except Exception as e:
+            logger.warning(f"东财直连不可用: {e}")
+            self._em = None
+
+        if self._em is None and not AKSHARE_AVAILABLE:
+            raise ImportError(
+                "无可用A股数据源。请安装依赖:  pip install requests akshare")
 
     def _pace(self):
         """限流：保证相邻请求之间有最小间隔"""
@@ -201,6 +210,19 @@ class AkshareSource:
     # ─── 实际抓取 ───
     def _fetch(self, bare: str, ktype_str: str,
                start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+        # 优先走东财直连（自带浏览器请求头，不需要额外的 market_id 查询）
+        if self._em is not None:
+            try:
+                df = self._em.get_kline(bare, ktype_str, start_date, end_date)
+                if df is not None and not df.empty:
+                    return self._normalize_em(df)
+                logger.debug(f"[东财直连] {bare} {ktype_str} 无数据，回退 akshare")
+            except Exception as e:
+                logger.warning(f"[东财直连] {bare} {ktype_str} 失败({type(e).__name__})，回退 akshare")
+
+        if not AKSHARE_AVAILABLE:
+            raise RuntimeError("东财直连失败且 akshare 不可用")
+
         self._pace()
         etf = is_etf_code(bare)
 
@@ -231,6 +253,25 @@ class AkshareSource:
                     start_date=s, end_date=e)
 
         return self._normalize(raw)
+
+    @staticmethod
+    def _normalize_em(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """东财直连返回 -> 本项目 schema（列名已是英文，仅需补齐）"""
+        if df is None or df.empty:
+            return None
+        df = df.copy()
+        if "last_close" not in df.columns:
+            df["last_close"] = df["close"].shift(1)
+        if "pe_ratio" not in df.columns:
+            df["pe_ratio"] = None
+        if "turnover_rate" not in df.columns:
+            df["turnover_rate"] = None
+        if "change_rate" not in df.columns:
+            df["change_rate"] = None
+
+        keep = ["time_key", "open", "high", "low", "close", "volume",
+                "turnover", "pe_ratio", "turnover_rate", "change_rate", "last_close"]
+        return df[[c for c in keep if c in df.columns]].reset_index(drop=True)
 
     @staticmethod
     def _normalize(raw: pd.DataFrame) -> Optional[pd.DataFrame]:
