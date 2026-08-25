@@ -17,6 +17,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 MENU_ITEMS = [
     ("📊", "数据总览", "dashboard"),
     ("🎯", "A500中心", "a500"),
+    ("📈", "行情图表", "chart"),
     ("📡", "实时行情", "realtime"),
     ("💰", "模拟交易", "paper"),
     ("🧪", "策略编辑", "strategy"),
@@ -173,10 +174,12 @@ class MainWindow(QMainWindow):
         from gui.panels.paper_trading import PaperTradingPanel
         from gui.panels.strategy_editor import StrategyEditorPanel
         from gui.panels.a500_center import A500CenterPanel
+        from gui.panels.chart_viewer import ChartViewerPanel
 
         panel_map = {
             "dashboard": DashboardPanel(self),
             "a500": A500CenterPanel(self),
+            "chart": ChartViewerPanel(self),
             "realtime": RealtimeMonitorPanel(self),
             "paper": PaperTradingPanel(self),
             "strategy": StrategyEditorPanel(self),
