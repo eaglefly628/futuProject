@@ -27,6 +27,7 @@ class KlineDownloadPanel(BasePanel):
         card, layout = self.make_card("下载参数")
 
         grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(12)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
@@ -65,6 +66,7 @@ class KlineDownloadPanel(BasePanel):
 
         # 选项行
         opt_row = QHBoxLayout()
+        opt_row.setContentsMargins(0, 0, 0, 0)
         self._incr_check = QCheckBox("增量模式（从上次断点继续）")
         self._incr_check.setChecked(True)
         opt_row.addWidget(self._incr_check)
@@ -77,6 +79,7 @@ class KlineDownloadPanel(BasePanel):
 
         # 操作按钮
         btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
         self._start_btn = self.make_primary_btn("🚀 开始下载", self._on_start)
         self._stop_btn = self.make_danger_btn("⏹ 停止", self._on_stop)
         self._stop_btn.setEnabled(False)
@@ -95,6 +98,7 @@ class KlineDownloadPanel(BasePanel):
         prog_layout.addWidget(self._progress_bar)
 
         self._log = QTextEdit()
+        self._log.setMinimumHeight(120)
         self._log.setObjectName("logPanel")
         self._log.setReadOnly(True)
         self._log.setMinimumHeight(200)

@@ -18,6 +18,7 @@ class WatchlistPanel(BasePanel):
         # ─── 添加卡片 ───
         card, layout = self.make_card("添加股票")
         row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel("市场"))
         self._market_combo = QComboBox()
         self._market_combo.addItems(["US", "HK", "SH", "SZ"])
@@ -36,6 +37,7 @@ class WatchlistPanel(BasePanel):
 
         # 快捷添加
         quick_row = QHBoxLayout()
+        quick_row.setContentsMargins(0, 0, 0, 0)
         quick_row.addWidget(QLabel("快捷添加:"))
         for code in ["US.AAPL", "US.TSLA", "US.NVDA", "HK.00700", "SH.600519"]:
             btn = QPushButton(code)
@@ -51,6 +53,7 @@ class WatchlistPanel(BasePanel):
         # ─── 列表卡片 ───
         list_card, list_layout = self.make_card("当前监控列表")
         self._table = QTableWidget()
+        self._table.setMinimumHeight(200)
         self._table.setColumnCount(3)
         self._table.setHorizontalHeaderLabels(["市场", "股票代码", "操作"])
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)

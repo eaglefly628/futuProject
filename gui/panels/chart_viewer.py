@@ -55,6 +55,7 @@ class ChartViewerPanel(BasePanel):
         lv.addWidget(self._filter_input)
 
         self._tree = QTreeWidget()
+        self._tree.setMinimumHeight(200)
         self._tree.setHeaderLabels(["标的", "周期数", "条数"])
         self._tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._tree.setAlternatingRowColors(True)
@@ -79,6 +80,7 @@ class ChartViewerPanel(BasePanel):
 
         # 工具栏
         bar = QHBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(10)
 
         self._title_label = QLabel("未选择标的")

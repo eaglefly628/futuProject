@@ -19,6 +19,7 @@ class TickCollectPanel(BasePanel):
         card, layout = self.make_card("采集参数")
 
         row1 = QHBoxLayout()
+        row1.setContentsMargins(0, 0, 0, 0)
         row1.addWidget(QLabel("股票代码"))
         self._code_input = QLineEdit()
         self._code_input.setPlaceholderText("如 US.AAPL")
@@ -32,6 +33,7 @@ class TickCollectPanel(BasePanel):
         layout.addLayout(row1)
 
         btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
         self._start_btn = self.make_primary_btn("⚡ 开始采集", self._on_start)
         btn_row.addWidget(self._start_btn)
         btn_row.addStretch()
@@ -40,6 +42,7 @@ class TickCollectPanel(BasePanel):
 
         log_card, log_layout = self.make_card("采集日志")
         self._log = QTextEdit()
+        self._log.setMinimumHeight(120)
         self._log.setObjectName("logPanel")
         self._log.setReadOnly(True)
         log_layout.addWidget(self._log)

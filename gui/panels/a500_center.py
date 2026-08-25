@@ -59,6 +59,7 @@ class A500CenterPanel(BasePanel):
     def _build(self):
         # ─── 顶部工具栏 ───
         toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
         toolbar.setSpacing(10)
 
         toolbar.addWidget(QLabel("标的:"))
@@ -167,6 +168,7 @@ class A500CenterPanel(BasePanel):
 
         # ── 顶部: 评分仪表 + 关键指标 ──
         top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
         top_row.setSpacing(12)
 
         # 评分仪表盘
@@ -213,6 +215,7 @@ class A500CenterPanel(BasePanel):
 
         # ── 中部: 指标网格 ──
         mid_row = QHBoxLayout()
+        mid_row.setContentsMargins(0, 0, 0, 0)
         mid_row.setSpacing(12)
 
         # 量价指标
@@ -241,6 +244,7 @@ class A500CenterPanel(BasePanel):
         # ── 底部: 信号列表 ──
         signal_card, signal_layout = self.make_card("分析信号")
         self._signal_text = QTextEdit()
+        self._signal_text.setMinimumHeight(120)
         self._signal_text.setObjectName("logPanel")
         self._signal_text.setReadOnly(True)
         self._signal_text.setMaximumHeight(160)
@@ -279,6 +283,7 @@ class A500CenterPanel(BasePanel):
         # 周期选择
         sel_card, sel_layout = self.make_card("采集周期")
         kt_row = QHBoxLayout()
+        kt_row.setContentsMargins(0, 0, 0, 0)
         self._ktype_checks = {}
         for kt, label, days in KTYPE_LABELS:
             cb = QCheckBox(f"{label} ({days}天)")
@@ -290,6 +295,7 @@ class A500CenterPanel(BasePanel):
 
         # 标的选择
         code_row = QHBoxLayout()
+        code_row.setContentsMargins(0, 0, 0, 0)
         code_row.addWidget(QLabel("采集范围:"))
         self._scope_combo = QComboBox()
         self._scope_combo.addItem("当前选中标的", "current")
@@ -316,6 +322,7 @@ class A500CenterPanel(BasePanel):
         # 数据覆盖表
         cov_card, cov_layout = self.make_card("本地数据覆盖")
         self._cov_table = QTableWidget()
+        self._cov_table.setMinimumHeight(200)
         self._cov_table.setColumnCount(7)
         self._cov_table.setHorizontalHeaderLabels(
             ["代码", "名称", "1分钟", "5分钟", "15分钟", "60分钟", "日线"])
@@ -329,6 +336,7 @@ class A500CenterPanel(BasePanel):
         # 日志
         log_card, log_layout = self.make_card("采集日志")
         self._fetch_log = QTextEdit()
+        self._fetch_log.setMinimumHeight(120)
         self._fetch_log.setObjectName("logPanel")
         self._fetch_log.setReadOnly(True)
         self._fetch_log.setMaximumHeight(120)

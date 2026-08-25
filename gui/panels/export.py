@@ -20,6 +20,7 @@ class ExportPanel(BasePanel):
         card, layout = self.make_card("导出设置")
 
         row1 = QHBoxLayout()
+        row1.setContentsMargins(0, 0, 0, 0)
         row1.addWidget(QLabel("股票代码"))
         self._code_input = QLineEdit()
         self._code_input.setPlaceholderText("如 US.AAPL")
@@ -32,6 +33,7 @@ class ExportPanel(BasePanel):
         layout.addLayout(row1)
 
         row2 = QHBoxLayout()
+        row2.setContentsMargins(0, 0, 0, 0)
         self._parquet_check = QCheckBox("Parquet 格式")
         self._parquet_check.setChecked(True)
         self._csv_check = QCheckBox("CSV 格式")
@@ -42,6 +44,7 @@ class ExportPanel(BasePanel):
         layout.addLayout(row2)
 
         btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.addWidget(self.make_primary_btn("💾 导出", self._on_export))
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -52,6 +55,7 @@ class ExportPanel(BasePanel):
             "整库备份 / 恢复  ·  用于跨设备搬运（Parquet 压缩，体积约为 .db 的 1/6）")
 
         path_row = QHBoxLayout()
+        path_row.setContentsMargins(0, 0, 0, 0)
         path_row.addWidget(QLabel("备份目录"))
         self._backup_input = QLineEdit()
         default_dir = os.path.join(
@@ -64,12 +68,14 @@ class ExportPanel(BasePanel):
         bk_layout.addLayout(path_row)
 
         opt_row = QHBoxLayout()
+        opt_row.setContentsMargins(0, 0, 0, 0)
         self._zip_check = QCheckBox("备份后打包成 zip")
         opt_row.addWidget(self._zip_check)
         opt_row.addStretch()
         bk_layout.addLayout(opt_row)
 
         bk_btn_row = QHBoxLayout()
+        bk_btn_row.setContentsMargins(0, 0, 0, 0)
         bk_btn_row.addWidget(self.make_primary_btn("📦 备份全部数据", self._on_backup))
         bk_btn_row.addWidget(self.make_primary_btn("📥 从备份恢复", self._on_restore))
         bk_btn_row.addWidget(self.make_primary_btn("🔍 查看备份内容", self._on_inspect))
@@ -87,6 +93,7 @@ class ExportPanel(BasePanel):
 
         log_card, log_layout = self.make_card("运行结果")
         self._log = QTextEdit()
+        self._log.setMinimumHeight(120)
         self._log.setObjectName("logPanel")
         self._log.setReadOnly(True)
         log_layout.addWidget(self._log)

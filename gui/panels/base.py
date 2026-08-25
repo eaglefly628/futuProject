@@ -3,7 +3,7 @@
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QFrame, QPushButton, QGroupBox, QGridLayout
+    QFrame, QPushButton, QGroupBox, QGridLayout, QScrollArea
 )
 from PySide6.QtCore import Qt
 
@@ -27,12 +27,21 @@ class BasePanel(QWidget):
             s.setObjectName("panelSubtitle")
             self._layout.addWidget(s)
 
-        # 内容区(带padding和滚动)
+        # 内容区：放进滚动容器，窗口变小时出现滚动条而不是把控件压到重叠
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
         self._content = QWidget()
+        self._content.setObjectName("panelContent")
         self._content_layout = QVBoxLayout(self._content)
         self._content_layout.setContentsMargins(24, 8, 24, 24)
         self._content_layout.setSpacing(16)
-        self._layout.addWidget(self._content, 1)
+
+        self._scroll.setWidget(self._content)
+        self._layout.addWidget(self._scroll, 1)
 
     def add_widget(self, w):
         self._content_layout.addWidget(w)
@@ -43,15 +52,20 @@ class BasePanel(QWidget):
     def add_stretch(self):
         self._content_layout.addStretch()
 
+    # 卡片内边距：显式设置，不依赖 QSS padding（跨平台表现不一致）
+    CARD_MARGIN = (16, 14, 16, 14)
+
     def make_card(self, title=None) -> tuple:
         """创建卡片, 返回 (card_widget, card_layout)"""
         card = QFrame()
         card.setObjectName("card")
         layout = QVBoxLayout(card)
+        layout.setContentsMargins(*self.CARD_MARGIN)
         layout.setSpacing(12)
         if title:
             t = QLabel(title)
             t.setObjectName("cardTitle")
+            t.setWordWrap(True)
             layout.addWidget(t)
         return card, layout
 
@@ -60,6 +74,7 @@ class BasePanel(QWidget):
         card = QFrame()
         card.setObjectName("card")
         layout = QVBoxLayout(card)
+        layout.setContentsMargins(*self.CARD_MARGIN)
         layout.setSpacing(4)
         v = QLabel(str(value))
         v.setObjectName("statValue")

@@ -265,6 +265,7 @@ class StrategyEditorPanel(BasePanel):
 
         # 按钮行
         btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
         new_btn = self.make_primary_btn("新建策略", self._on_new_strategy)
         new_btn.setFixedHeight(32)
         btn_row.addWidget(new_btn)
@@ -310,6 +311,7 @@ class StrategyEditorPanel(BasePanel):
         """构建编辑区"""
         # ─── 策略名称 ───
         name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
         name_row.addWidget(QLabel("策略名称:"))
         self._name_input = QLineEdit()
         self._name_input.setPlaceholderText("输入策略名称")
@@ -319,6 +321,7 @@ class StrategyEditorPanel(BasePanel):
         # ─── 目标股票 ───
         target_card, target_layout = self.make_card("目标股票")
         target_row = QHBoxLayout()
+        target_row.setContentsMargins(0, 0, 0, 0)
         self._target_input = QLineEdit()
         self._target_input.setPlaceholderText("输入股票代码，如 US.AAPL")
         self._target_input.returnPressed.connect(self._on_add_target)
@@ -339,6 +342,7 @@ class StrategyEditorPanel(BasePanel):
 
         # ─── 模式切换 ───
         mode_row = QHBoxLayout()
+        mode_row.setContentsMargins(0, 0, 0, 0)
         mode_row.addWidget(QLabel("策略模式:"))
         self._visual_mode_btn = QPushButton("可视化模式")
         self._visual_mode_btn.setCheckable(True)
@@ -374,6 +378,7 @@ class StrategyEditorPanel(BasePanel):
 
         # ─── 操作按钮 ───
         action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
         save_btn = self.make_primary_btn("保存", self._on_save)
         save_btn.setFixedHeight(36)
         action_row.addWidget(save_btn)
@@ -404,6 +409,7 @@ class StrategyEditorPanel(BasePanel):
         # ─── 回测参数 ───
         bt_params_card, bt_params_layout = self.make_card("回测参数")
         bt_params_row = QHBoxLayout()
+        bt_params_row.setContentsMargins(0, 0, 0, 0)
         bt_params_row.addWidget(QLabel("起始日期:"))
         self._bt_start_date = QDateEdit()
         self._bt_start_date.setCalendarPopup(True)
@@ -447,6 +453,7 @@ class StrategyEditorPanel(BasePanel):
 
         # 逻辑组合
         logic_row = QHBoxLayout()
+        logic_row.setContentsMargins(0, 0, 0, 0)
         logic_row.addWidget(QLabel("条件逻辑:"))
         self._logic_combo = QComboBox()
         self._logic_combo.addItems(["AND (全部满足)", "OR (任一满足)"])
@@ -476,6 +483,7 @@ class StrategyEditorPanel(BasePanel):
         # ─── 执行动作 ───
         action_card, action_layout = self.make_card("执行动作")
         action_grid = QGridLayout()
+        action_grid.setContentsMargins(0, 0, 0, 0)
         action_grid.setSpacing(8)
 
         action_grid.addWidget(QLabel("方向:"), 0, 0)
@@ -542,6 +550,7 @@ class StrategyEditorPanel(BasePanel):
         """构建回测结果区域"""
         # 统计卡片
         stats_row = QHBoxLayout()
+        stats_row.setContentsMargins(0, 0, 0, 0)
         stats_row.setSpacing(12)
         self._bt_card_return = self.make_stat_card("收益率", "--", COLORS["accent"])
         self._bt_card_drawdown = self.make_stat_card("最大回撤", "--", COLORS["red"])
@@ -558,6 +567,7 @@ class StrategyEditorPanel(BasePanel):
         # 交易记录表
         trades_card, trades_layout = self.make_card("回测交易记录")
         self._bt_trades_table = QTableWidget()
+        self._bt_trades_table.setMinimumHeight(200)
         self._bt_trades_table.setColumnCount(8)
         self._bt_trades_table.setHorizontalHeaderLabels([
             "日期", "代码", "方向", "数量", "价格", "金额", "费用", "盈亏"

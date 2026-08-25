@@ -18,6 +18,7 @@ class DashboardPanel(BasePanel):
     def _build(self):
         # ─── 统计卡片行 ───
         stats_row = QHBoxLayout()
+        stats_row.setContentsMargins(0, 0, 0, 0)
         stats_row.setSpacing(16)
         self._card_kline = self.make_stat_card("K线总记录", "0", COLORS['accent'])
         self._card_stocks = self.make_stat_card("覆盖股票", "0", COLORS['blue'])
@@ -36,6 +37,7 @@ class DashboardPanel(BasePanel):
         # 数据明细表
         detail_card, detail_layout = self.make_card("数据明细")
         self._detail_table = QTableWidget()
+        self._detail_table.setMinimumHeight(200)
         self._detail_table.setAlternatingRowColors(True)
         self._detail_table.setColumnCount(5)
         self._detail_table.setHorizontalHeaderLabels(["股票代码", "K线类型", "记录数", "开始时间", "结束时间"])
@@ -49,6 +51,7 @@ class DashboardPanel(BasePanel):
         # 日志面板
         log_card, log_layout = self.make_card("运行日志")
         self._log_text = QTextEdit()
+        self._log_text.setMinimumHeight(120)
         self._log_text.setObjectName("logPanel")
         self._log_text.setReadOnly(True)
         self._log_text.setMaximumHeight(200)

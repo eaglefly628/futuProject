@@ -101,7 +101,6 @@ QWidget {{
     background-color: {COLORS['bg_card']};
     border: 1px solid {COLORS['border']};
     border-radius: 8px;
-    padding: 16px;
 }}
 #cardTitle {{
     font-size: 14px;
@@ -397,4 +396,49 @@ QStatusBar::item {{
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: 11px;
 }}
+
+/* ═══════ 面板滚动区 ═══════ */
+QScrollArea {{
+    background-color: transparent;
+    border: none;
+}}
+#panelContent {{
+    background-color: transparent;
+}}
+QScrollBar:vertical {{
+    background: transparent;
+    width: 10px;
+    margin: 0;
+}}
+QScrollBar::handle:vertical {{
+    background: {COLORS['border_light']};
+    border-radius: 5px;
+    min-height: 30px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: {COLORS['text_muted']};
+}}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0;
+}}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+    background: transparent;
+}}
+QScrollBar:horizontal {{
+    background: transparent;
+    height: 10px;
+    margin: 0;
+}}
+QScrollBar::handle:horizontal {{
+    background: {COLORS['border_light']};
+    border-radius: 5px;
+    min-width: 30px;
+}}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+    width: 0;
+}}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+    background: transparent;
+}}
+
 """

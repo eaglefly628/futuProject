@@ -19,6 +19,7 @@ class QualityCheckPanel(BasePanel):
         # 参数
         card, layout = self.make_card("检查参数")
         row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel("股票代码"))
         self._code_input = QLineEdit()
         self._code_input.setPlaceholderText("如 US.AAPL")

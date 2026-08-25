@@ -39,6 +39,7 @@ class RealtimeMonitorPanel(BasePanel):
 
         # 工具栏: 添加股票代码
         toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
         toolbar.addWidget(QLabel("股票代码"))
         self._code_input = QLineEdit()
         self._code_input.setPlaceholderText("如 HK.00700, US.AAPL")
@@ -66,6 +67,7 @@ class RealtimeMonitorPanel(BasePanel):
 
         # 行情表格
         self._quote_table = QTableWidget()
+        self._quote_table.setMinimumHeight(200)
         self._quote_table.setAlternatingRowColors(True)
         self._quote_table.setColumnCount(len(self.QUOTE_COLUMNS))
         self._quote_table.setHorizontalHeaderLabels(self.QUOTE_COLUMNS)
@@ -82,6 +84,7 @@ class RealtimeMonitorPanel(BasePanel):
 
         # 预警设置行
         alert_toolbar = QHBoxLayout()
+        alert_toolbar.setContentsMargins(0, 0, 0, 0)
         alert_toolbar.addWidget(QLabel("股票代码"))
         self._alert_code_input = QLineEdit()
         self._alert_code_input.setPlaceholderText("如 HK.00700")
@@ -113,6 +116,7 @@ class RealtimeMonitorPanel(BasePanel):
 
         # 预警表格
         self._alert_table = QTableWidget()
+        self._alert_table.setMinimumHeight(200)
         self._alert_table.setAlternatingRowColors(True)
         self._alert_table.setColumnCount(6)
         self._alert_table.setHorizontalHeaderLabels(["ID", "代码", "名称", "条件", "目标价", "状态"])

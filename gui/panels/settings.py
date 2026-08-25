@@ -18,6 +18,7 @@ class SettingsPanel(BasePanel):
         # ─── OpenD 连接设置 ───
         card1, layout1 = self.make_card("🔗 OpenD 连接设置")
         grid1 = QGridLayout()
+        grid1.setContentsMargins(0, 0, 0, 0)
         grid1.setSpacing(10)
         grid1.addWidget(QLabel("主机地址"), 0, 0)
         self._host = QLineEdit(self._main.config.get("opend", "host", default="127.0.0.1"))
@@ -36,6 +37,7 @@ class SettingsPanel(BasePanel):
         # ─── K线下载设置 ───
         card2, layout2 = self.make_card("📊 K线下载设置")
         grid2 = QGridLayout()
+        grid2.setContentsMargins(0, 0, 0, 0)
         grid2.setSpacing(10)
         grid2.addWidget(QLabel("单次请求最大条数"), 0, 0)
         self._max_count = QSpinBox()
@@ -54,6 +56,7 @@ class SettingsPanel(BasePanel):
         # ─── 逐笔采集设置 ───
         card3, layout3 = self.make_card("⚡ 逐笔采集设置")
         grid3 = QGridLayout()
+        grid3.setContentsMargins(0, 0, 0, 0)
         grid3.setSpacing(10)
         self._tick_enabled = QCheckBox("启用逐笔采集")
         self._tick_enabled.setChecked(self._main.config.get("tick", "enabled", default=True))
@@ -75,6 +78,7 @@ class SettingsPanel(BasePanel):
         # ─── 存储设置 ───
         card4, layout4 = self.make_card("💾 存储设置")
         grid4 = QGridLayout()
+        grid4.setContentsMargins(0, 0, 0, 0)
         grid4.setSpacing(10)
         grid4.addWidget(QLabel("数据库路径"), 0, 0)
         self._db_path = QLineEdit(str(self._main.config.get("storage", "sqlite_path", default="")))
@@ -86,6 +90,7 @@ class SettingsPanel(BasePanel):
 
         # ─── 保存按钮 ───
         btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.addStretch()
         btn_row.addWidget(self.make_primary_btn("💾 保存配置", self._on_save))
         self.add_layout(btn_row)

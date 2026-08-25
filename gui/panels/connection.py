@@ -2,7 +2,7 @@
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QHBoxLayout, QVBoxLayout, QLabel, QTextEdit, QFrame,
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QTextEdit, QFrame,
     QLineEdit, QCheckBox, QPushButton, QFileDialog, QGridLayout,
     QSpinBox, QComboBox, QMessageBox
 )
@@ -33,51 +33,59 @@ class ConnectionPanel(BasePanel):
         status_card = QFrame()
         status_card.setObjectName("card")
         status_layout = QHBoxLayout(status_card)
-        status_layout.setSpacing(30)
+        status_layout.setContentsMargins(*self.CARD_MARGIN)
+        status_layout.setSpacing(24)
 
-        # OpenD 进程状态
-        opend_box = QVBoxLayout()
-        self._opend_icon = QLabel("⬤")
-        self._opend_icon.setStyleSheet(f"font-size: 36px; color: {COLORS['text_muted']};")
-        self._opend_icon.setAlignment(Qt.AlignCenter)
-        opend_box.addWidget(self._opend_icon)
-        self._opend_text = QLabel("OpenD 未运行")
-        self._opend_text.setStyleSheet(
-            f"font-size: 14px; font-weight: bold; color: {COLORS['text_muted']};")
-        self._opend_text.setAlignment(Qt.AlignCenter)
-        opend_box.addWidget(self._opend_text)
-        status_layout.addLayout(opend_box)
+        def make_status_box(icon_color, text, text_color):
+            """状态指示块：固定宽度，避免文字变长时挤压相邻元素"""
+            box = QWidget()
+            box.setFixedWidth(150)
+            v = QVBoxLayout(box)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(6)
+            icon = QLabel("⬤")
+            icon.setStyleSheet(f"font-size: 30px; color: {icon_color};")
+            icon.setAlignment(Qt.AlignCenter)
+            v.addWidget(icon)
+            lbl = QLabel(text)
+            lbl.setStyleSheet(
+                f"font-size: 13px; font-weight: bold; color: {text_color};")
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setWordWrap(True)
+            v.addWidget(lbl)
+            return box, icon, lbl
 
-        # 分隔
+        opend_box, self._opend_icon, self._opend_text = make_status_box(
+            COLORS["text_muted"], "OpenD 未运行", COLORS["text_muted"])
+        status_layout.addWidget(opend_box)
+
         sep = QFrame()
-        sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet(f"color: {COLORS['border']};")
+        sep.setFrameShape(QFrame.NoFrame)
+        sep.setFixedWidth(1)
+        sep.setMinimumHeight(60)
+        # VLine 的 color 在 QSS 里不生效，要用 background-color
+        sep.setStyleSheet(f"background-color: {COLORS['border']};")
         status_layout.addWidget(sep)
 
-        # API 连接状态
-        api_box = QVBoxLayout()
-        self._status_icon = QLabel("⬤")
-        self._status_icon.setStyleSheet(f"font-size: 36px; color: {COLORS['red']};")
-        self._status_icon.setAlignment(Qt.AlignCenter)
-        api_box.addWidget(self._status_icon)
-        self._status_text = QLabel("API 未连接")
-        self._status_text.setStyleSheet(
-            f"font-size: 14px; font-weight: bold; color: {COLORS['text_muted']};")
-        self._status_text.setAlignment(Qt.AlignCenter)
-        api_box.addWidget(self._status_text)
-        status_layout.addLayout(api_box)
+        api_box, self._status_icon, self._status_text = make_status_box(
+            COLORS["red"], "API 未连接", COLORS["text_muted"])
+        status_layout.addWidget(api_box)
 
-        status_layout.addStretch()
-
-        # 地址信息
+        # 地址信息：占据剩余空间，长路径省略而不是换行撑高卡片
         addr_box = QVBoxLayout()
+        addr_box.setContentsMargins(0, 0, 0, 0)
+        addr_box.setSpacing(6)
+        addr_box.addStretch()
         self._addr_label = QLabel()
-        self._addr_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 13px;")
+        self._addr_label.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 13px;")
         addr_box.addWidget(self._addr_label)
         self._exe_label = QLabel()
-        self._exe_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
-        self._exe_label.setWordWrap(True)
+        self._exe_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px;")
+        self._exe_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         addr_box.addWidget(self._exe_label)
+        addr_box.addStretch()
         status_layout.addLayout(addr_box, 1)
 
         self.add_widget(status_card)
@@ -85,12 +93,16 @@ class ConnectionPanel(BasePanel):
         # ─── OpenD 启动配置 ───
         cfg_card, cfg_layout = self.make_card("OpenD 启动配置")
         grid = QGridLayout()
-        grid.setSpacing(10)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
         grid.setColumnStretch(1, 1)
+        grid.setColumnMinimumWidth(0, 88)   # 标签列对齐
 
         # 可执行文件路径
         grid.addWidget(QLabel("OpenD 路径:"), 0, 0)
         path_row = QHBoxLayout()
+        path_row.setContentsMargins(0, 0, 0, 0)
         self._exe_input = QLineEdit()
         self._exe_input.setPlaceholderText("留空则自动在项目 FutuOpenD/ 目录下查找")
         path_row.addWidget(self._exe_input, 1)
@@ -113,6 +125,7 @@ class ConnectionPanel(BasePanel):
         # 密码
         grid.addWidget(QLabel("登录密码:"), 2, 0)
         pwd_row = QHBoxLayout()
+        pwd_row.setContentsMargins(0, 0, 0, 0)
         self._pwd_input = QLineEdit()
         self._pwd_input.setEchoMode(QLineEdit.Password)
         self._pwd_input.setPlaceholderText("交易密码（本地 MD5 加密后保存）")
@@ -126,6 +139,7 @@ class ConnectionPanel(BasePanel):
         # 端口 / 语言 / 控制台
         grid.addWidget(QLabel("API 端口:"), 3, 0)
         opt_row = QHBoxLayout()
+        opt_row.setContentsMargins(0, 0, 0, 0)
         self._port_spin = QSpinBox()
         self._port_spin.setRange(1024, 65535)
         self._port_spin.setValue(11111)
@@ -148,6 +162,7 @@ class ConnectionPanel(BasePanel):
 
         # 启动按钮行
         btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
         self._launch_btn = self.make_primary_btn("▶ 启动 OpenD 并连接", self._on_launch_and_connect)
         btn_row.addWidget(self._launch_btn)
 
@@ -176,6 +191,7 @@ class ConnectionPanel(BasePanel):
         term_card, term_layout = self.make_card(
             "OpenD 终端  ·  可直接输入命令（如手机验证码）")
         self._terminal = OpenDTerminal()
+        self._terminal.setMinimumHeight(240)
         term_layout.addWidget(self._terminal)
         self.add_widget(term_card)
         self._content_layout.setStretchFactor(term_card, 1)
@@ -328,9 +344,14 @@ class ConnectionPanel(BasePanel):
 
         exe = self._exe_input.text().strip()
         if exe:
-            self._exe_label.setText(f"OpenD: {exe}")
+            # 路径可能很长，中间省略，完整路径放 tooltip
+            avail = max(200, self._exe_label.width() or 400)
+            fm = self._exe_label.fontMetrics()
+            self._exe_label.setText("OpenD: " + fm.elidedText(exe, Qt.ElideMiddle, avail))
+            self._exe_label.setToolTip(exe)
         else:
             self._exe_label.setText("OpenD: 未指定")
+            self._exe_label.setToolTip("")
 
     # ─── 启动 + 连接 ───
     def _on_launch_and_connect(self):

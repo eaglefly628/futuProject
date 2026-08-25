@@ -22,6 +22,7 @@ class BatchDownloadPanel(BasePanel):
         # ─── K线类型选择 ───
         card, layout = self.make_card("K线类型选择")
         ktype_row = QHBoxLayout()
+        ktype_row.setContentsMargins(0, 0, 0, 0)
         self._ktype_checks = {}
         defaults = self._main.config.get("kline", "default_types", default=["K_1M", "K_DAY"])
         for kt in KTYPE_ALL:
@@ -32,6 +33,7 @@ class BatchDownloadPanel(BasePanel):
         layout.addLayout(ktype_row)
 
         opt_row = QHBoxLayout()
+        opt_row.setContentsMargins(0, 0, 0, 0)
         self._incr_check = QCheckBox("增量模式")
         self._incr_check.setChecked(True)
         opt_row.addWidget(self._incr_check)
@@ -39,6 +41,7 @@ class BatchDownloadPanel(BasePanel):
         layout.addLayout(opt_row)
 
         btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
         self._start_btn = self.make_primary_btn("🚀 开始批量下载", self._on_start)
         self._stop_btn = self.make_danger_btn("⏹ 停止", self._on_stop)
         self._stop_btn.setEnabled(False)
@@ -51,6 +54,7 @@ class BatchDownloadPanel(BasePanel):
         # ─── 监控列表预览 ───
         list_card, list_layout = self.make_card("监控列表预览")
         self._stock_table = QTableWidget()
+        self._stock_table.setMinimumHeight(200)
         self._stock_table.setColumnCount(2)
         self._stock_table.setHorizontalHeaderLabels(["市场", "股票代码"])
         self._stock_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -66,6 +70,7 @@ class BatchDownloadPanel(BasePanel):
         self._progress.setVisible(False)
         log_layout.addWidget(self._progress)
         self._log = QTextEdit()
+        self._log.setMinimumHeight(120)
         self._log.setObjectName("logPanel")
         self._log.setReadOnly(True)
         log_layout.addWidget(self._log)

@@ -68,6 +68,7 @@ class PaperTradingPanel(BasePanel):
         """构建交易下单标签页"""
         # ─── 账户摘要卡片行 ───
         summary_row = QHBoxLayout()
+        summary_row.setContentsMargins(0, 0, 0, 0)
         summary_row.setSpacing(12)
         self._card_total_asset = self.make_stat_card("总资产", "0.00", COLORS["accent"])
         self._card_cash = self.make_stat_card("可用资金", "0.00", COLORS["blue"])
@@ -82,6 +83,7 @@ class PaperTradingPanel(BasePanel):
         # ─── 下单表单 ───
         form_card, form_layout = self.make_card("快速下单")
         form_grid = QGridLayout()
+        form_grid.setContentsMargins(0, 0, 0, 0)
         form_grid.setSpacing(8)
 
         # 第一行：代码 + 方向 + 类型
@@ -137,6 +139,7 @@ class PaperTradingPanel(BasePanel):
         # ─── 持仓表格 ───
         pos_card, pos_layout = self.make_card("当前持仓")
         self._pos_table = QTableWidget()
+        self._pos_table.setMinimumHeight(200)
         self._pos_table.setColumnCount(8)
         self._pos_table.setHorizontalHeaderLabels([
             "代码", "名称", "数量", "成本价", "现价", "盈亏", "盈亏%", "操作"
@@ -163,6 +166,7 @@ class PaperTradingPanel(BasePanel):
         """构建委托记录标签页"""
         # 过滤器
         filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(0, 0, 0, 0)
         filter_row.addWidget(QLabel("状态过滤:"))
         self._order_filter_combo = QComboBox()
         self._order_filter_combo.addItems(["全部", "待成交", "已成交", "已撤销"])
@@ -174,6 +178,7 @@ class PaperTradingPanel(BasePanel):
 
         # 订单表格
         self._orders_table = QTableWidget()
+        self._orders_table.setMinimumHeight(200)
         self._orders_table.setColumnCount(11)
         self._orders_table.setHorizontalHeaderLabels([
             "时间", "代码", "方向", "类型", "数量", "价格", "成交价",
@@ -196,6 +201,7 @@ class PaperTradingPanel(BasePanel):
         """构建交易统计标签页"""
         # 统计卡片
         stats_row = QHBoxLayout()
+        stats_row.setContentsMargins(0, 0, 0, 0)
         stats_row.setSpacing(12)
         self._card_trade_count = self.make_stat_card("总交易次数", "0", COLORS["accent"])
         self._card_filled_count = self.make_stat_card("已成交", "0", COLORS["blue"])
@@ -210,6 +216,7 @@ class PaperTradingPanel(BasePanel):
         # 交易历史表格
         history_card, history_layout = self.make_card("交易历史")
         self._history_table = QTableWidget()
+        self._history_table.setMinimumHeight(200)
         self._history_table.setColumnCount(10)
         self._history_table.setHorizontalHeaderLabels([
             "时间", "订单号", "代码", "方向", "数量", "成交价",
