@@ -6,12 +6,35 @@ AkShare A股数据源 (东方财富)
 
 数据落库 schema 与 Futu 路径完全一致，下游图表/分析无需改动。
 """
+import random
 import time
 from datetime import datetime, timedelta
 from typing import Optional, List
 
 import pandas as pd
 from loguru import logger
+
+# 东方财富会限流，需要重试 + 退避
+MAX_RETRIES = 4
+BASE_BACKOFF = 1.5      # 秒，指数退避基数
+MIN_GAP = 0.8           # 相邻请求最小间隔
+
+# 连接被重置类错误，值得重试
+RETRIABLE_HINTS = (
+    "RemoteDisconnected",
+    "Connection aborted",
+    "Connection reset",
+    "ConnectionError",
+    "timed out",
+    "Read timed out",
+    "Max retries exceeded",
+    "Temporary failure",
+)
+
+
+def _is_retriable(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}"
+    return any(h.lower() in text.lower() for h in RETRIABLE_HINTS)
 
 try:
     import akshare as ak
@@ -84,10 +107,20 @@ class AkshareSource:
     def __init__(self, database, config):
         self.db = database
         self.config = config
-        self.interval = config.get("kline", "request_interval", default=0.5)
+        self.interval = max(MIN_GAP,
+                            float(config.get("kline", "request_interval", default=0.8)))
+        self._last_call = 0.0
 
         if not AKSHARE_AVAILABLE:
             raise ImportError("请先安装 akshare:  pip install akshare")
+
+    def _pace(self):
+        """限流：保证相邻请求之间有最小间隔"""
+        elapsed = time.time() - self._last_call
+        gap = self.interval + random.uniform(0, 0.4)
+        if elapsed < gap:
+            time.sleep(gap - elapsed)
+        self._last_call = time.time()
 
     # ═══════════════════════════════════════
     def download_history(self, code: str, ktype_str: str,
@@ -127,12 +160,30 @@ class AkshareSource:
 
         logger.info(f"[akshare] 开始下载: {code} {ktype_str} [{start_date} ~ {end_date}]")
 
-        try:
-            df = self._fetch(bare, ktype_str, start_date, end_date)
-        except Exception as e:
-            logger.error(f"[akshare] 下载异常: {code} {ktype_str} - {e}")
+        df = None
+        last_err = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                df = self._fetch(bare, ktype_str, start_date, end_date)
+                break
+            except Exception as e:
+                last_err = e
+                if attempt >= MAX_RETRIES or not _is_retriable(e):
+                    logger.error(f"[akshare] 下载异常: {code} {ktype_str} - {e}")
+                    self.db.log_download(code, "kline", ktype_str,
+                                         start_date, end_date, 0, "error", str(e))
+                    return 0
+                # 指数退避 + 抖动，避开东财限流
+                wait = BASE_BACKOFF * (2 ** (attempt - 1)) + random.uniform(0, 1.0)
+                logger.warning(
+                    f"[akshare] {code} {ktype_str} 第{attempt}次失败({type(e).__name__})，"
+                    f"{wait:.1f}s 后重试")
+                time.sleep(wait)
+
+        if df is None:
+            logger.error(f"[akshare] 重试耗尽: {code} {ktype_str} - {last_err}")
             self.db.log_download(code, "kline", ktype_str, start_date, end_date,
-                                 0, "error", str(e))
+                                 0, "error", str(last_err))
             return 0
 
         if df is None or df.empty:
@@ -150,6 +201,7 @@ class AkshareSource:
     # ─── 实际抓取 ───
     def _fetch(self, bare: str, ktype_str: str,
                start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+        self._pace()
         etf = is_etf_code(bare)
 
         if ktype_str in MIN_PERIOD_MAP:
@@ -178,7 +230,6 @@ class AkshareSource:
                     symbol=bare, period=period, adjust="qfq",
                     start_date=s, end_date=e)
 
-        time.sleep(self.interval)
         return self._normalize(raw)
 
     @staticmethod

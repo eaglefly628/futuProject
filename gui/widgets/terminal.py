@@ -49,7 +49,10 @@ class OpenDTerminal(QWidget):
         self._output = QTextEdit()
         self._output.setReadOnly(True)
         self._output.setLineWrapMode(QTextEdit.NoWrap)
-        self._output.setFont(QFont("Consolas, Menlo, monospace", 11))
+        mono = QFont()
+        mono.setFamilies(["Consolas", "Menlo", "Courier New", "monospace"])
+        mono.setPointSize(11)
+        self._output.setFont(mono)
         self._output.setStyleSheet(f"""
             QTextEdit {{
                 background-color: #0A0E14;
