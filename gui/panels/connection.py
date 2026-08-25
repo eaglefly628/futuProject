@@ -236,12 +236,31 @@ class ConnectionPanel(BasePanel):
         from core.opend_launcher import list_opend_candidates
         found = list_opend_candidates()
         if not found:
-            QMessageBox.information(
-                self, "未找到",
-                "未在项目目录下找到 OpenD。\n\n"
-                "请将 OpenD 解压到项目的 FutuOpenD/ 目录，例如：\n"
-                "FutuOpenD/windows/Futu_OpenD_x.x.x_Windows/FutuOpenD.exe\n\n"
-                "或点击「浏览...」手动指定。")
+            port = self._port_spin.value()
+            host = self._main.config.get("opend", "host", default="127.0.0.1")
+            running = self._probe_port(host, port)
+
+            if running:
+                QMessageBox.information(
+                    self, "OpenD 已在运行",
+                    f"没找到 OpenD 程序文件，但检测到 {host}:{port} 已有服务。\n\n"
+                    f"OpenD 已经启动的话，直接点右侧「🔗 仅连接」即可，\n"
+                    f"不需要指定程序路径。")
+            else:
+                import platform
+                sys_name = platform.system()
+                hint = {
+                    "Darwin": "常见位置：/Applications、~/Downloads\n"
+                              "OpenD 通常是 FutuOpenD.app，选里面的\n"
+                              "FutuOpenD.app/Contents/MacOS/FutuOpenD",
+                    "Windows": "常见位置：C:/FutuOpenD、下载目录\n选 FutuOpenD.exe",
+                }.get(sys_name, "选 FutuOpenD 可执行文件")
+                QMessageBox.information(
+                    self, "未找到 OpenD",
+                    f"已搜索项目目录和系统常见位置，未找到 OpenD。\n\n"
+                    f"{hint}\n\n"
+                    f"请点「浏览...」手动指定。\n"
+                    f"若 OpenD 已经在别处启动，直接点「🔗 仅连接」。")
             return
         self._exe_input.setText(str(found[0]))
         self._launcher.set_exe_path(str(found[0]))
@@ -250,6 +269,16 @@ class ConnectionPanel(BasePanel):
             self._terminal.append(f'（共发现 {len(found)} 个，'
                 f'如需切换请用「浏览...」）')
         self._update_status_display()
+
+    @staticmethod
+    def _probe_port(host: str, port: int, timeout: float = 1.0) -> bool:
+        """探测端口是否已有服务（判断 OpenD 是否已在外部启动）"""
+        import socket
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except (OSError, socket.timeout):
+            return False
 
     # ─── 状态显示 ───
     def _update_opend_status(self):
@@ -260,6 +289,15 @@ class ConnectionPanel(BasePanel):
             self._opend_text.setStyleSheet(
                 f"font-size: 14px; font-weight: bold; color: {COLORS['green']};")
             self._stop_opend_btn.setEnabled(True)
+        elif self._probe_port(
+                self._main.config.get("opend", "host", default="127.0.0.1"),
+                self._port_spin.value(), timeout=0.3):
+            # 端口有服务但不是本程序拉起的（用户自己启动的 OpenD）
+            self._opend_icon.setStyleSheet(f"font-size: 36px; color: {COLORS['green']};")
+            self._opend_text.setText("OpenD 运行中（外部）")
+            self._opend_text.setStyleSheet(
+                f"font-size: 14px; font-weight: bold; color: {COLORS['green']};")
+            self._stop_opend_btn.setEnabled(False)
         else:
             self._opend_icon.setStyleSheet(f"font-size: 36px; color: {COLORS['text_muted']};")
             self._opend_text.setText("OpenD 未运行")

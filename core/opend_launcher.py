@@ -37,6 +37,35 @@ SEARCH_PATTERNS = {
     ],
 }
 
+# 项目目录之外的常见安装位置（OpenD 通常不会放进项目里）
+EXTRA_ROOTS = {
+    "Windows": [
+        "C:/FutuOpenD", "C:/Program Files/FutuOpenD",
+        "~/Downloads", "~/Desktop", "~/Documents",
+    ],
+    "Darwin": [
+        "/Applications", "~/Applications",
+        "~/Downloads", "~/Desktop", "~/Documents",
+    ],
+    "Linux": [
+        "/opt", "~/Downloads", "~/Desktop", "~",
+    ],
+}
+
+# 在上述根目录下用这些模式找（限制深度，避免全盘扫描）
+EXTRA_PATTERNS = {
+    "Windows": ["FutuOpenD.exe", "*/FutuOpenD.exe", "*/*/FutuOpenD.exe"],
+    "Darwin": [
+        "FutuOpenD.app/Contents/MacOS/FutuOpenD",
+        "*/FutuOpenD.app/Contents/MacOS/FutuOpenD",
+        "*/*/FutuOpenD.app/Contents/MacOS/FutuOpenD",
+        "OpenD.app/Contents/MacOS/OpenD",
+        "*/OpenD.app/Contents/MacOS/OpenD",
+        "*/*/OpenD.app/Contents/MacOS/OpenD",
+    ],
+    "Linux": ["FutuOpenD", "*/FutuOpenD", "*/*/FutuOpenD"],
+}
+
 
 def md5_password(pwd: str) -> str:
     """将明文密码转为 OpenD 需要的 32 位小写 MD5"""
@@ -50,31 +79,46 @@ def discover_opend(base_dir: Optional[Path] = None) -> Optional[Path]:
     Returns:
         找到的可执行文件绝对路径，未找到返回 None
     """
-    base = Path(base_dir) if base_dir else PROJECT_ROOT
-    system = platform.system()
-    patterns = SEARCH_PATTERNS.get(system, SEARCH_PATTERNS["Linux"])
-
-    for pattern in patterns:
-        for match in sorted(base.glob(pattern)):
-            if match.is_file():
-                logger.info(f"发现 OpenD: {match}")
-                return match.resolve()
+    found = list_opend_candidates(base_dir)
+    if found:
+        logger.info(f"发现 OpenD: {found[0]}")
+        return found[0]
     return None
 
 
-def list_opend_candidates(base_dir: Optional[Path] = None) -> List[Path]:
-    """列出所有可能的 OpenD 路径（用于让用户选择）"""
-    base = Path(base_dir) if base_dir else PROJECT_ROOT
-    system = platform.system()
-    patterns = SEARCH_PATTERNS.get(system, SEARCH_PATTERNS["Linux"])
+def list_opend_candidates(base_dir: Optional[Path] = None,
+                          include_system: bool = True) -> List[Path]:
+    """
+    列出所有可能的 OpenD 路径。
 
-    found = []
-    for pattern in patterns:
-        for match in base.glob(pattern):
-            if match.is_file():
-                resolved = match.resolve()
-                if resolved not in found:
-                    found.append(resolved)
+    先找项目目录，再找系统常见安装位置（/Applications、下载目录等）。
+    """
+    system = platform.system()
+    found: List[Path] = []
+
+    def scan(root: Path, patterns):
+        if not root.is_dir():
+            return
+        for pattern in patterns:
+            try:
+                for match in root.glob(pattern):
+                    if match.is_file():
+                        r = match.resolve()
+                        if r not in found:
+                            found.append(r)
+            except (OSError, PermissionError):
+                continue
+
+    # 1) 项目目录
+    base = Path(base_dir) if base_dir else PROJECT_ROOT
+    scan(base, SEARCH_PATTERNS.get(system, SEARCH_PATTERNS["Linux"]))
+
+    # 2) 系统常见位置
+    if include_system:
+        extra_patterns = EXTRA_PATTERNS.get(system, EXTRA_PATTERNS["Linux"])
+        for root in EXTRA_ROOTS.get(system, []):
+            scan(Path(root).expanduser(), extra_patterns)
+
     return found
 
 
