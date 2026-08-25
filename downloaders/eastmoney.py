@@ -75,18 +75,51 @@ def to_secid(code: str) -> str:
 class EastmoneyClient:
     """东财行情客户端"""
 
-    def __init__(self, timeout: int = 15, min_gap: float = 0.6):
+    def __init__(self, timeout: int = 15, min_gap: float = 0.6,
+                 use_proxy: Optional[bool] = None):
+        """
+        Args:
+            use_proxy: None=先直连再回退代理（默认）, False=只直连, True=只走代理
+
+        东财是国内服务。开着海外 VPN / 代理时，系统代理会劫持这些请求并失败
+        （表现为 ProxyError），所以默认优先绕过代理直连。
+        """
         self.timeout = timeout
         self.min_gap = min_gap
         self._last_call = 0.0
-        self._session = requests.Session()
-        self._session.headers.update({
+        self._use_proxy = use_proxy
+        # None 时先试直连；显式指定则照做
+        self._proxy_mode = "direct" if use_proxy in (None, False) else "proxy"
+        self._session = self._make_session(trust_env=(self._proxy_mode == "proxy"))
+
+    def _make_session(self, trust_env: bool) -> requests.Session:
+        s = requests.Session()
+        # trust_env=False 让 requests 忽略 HTTP_PROXY/HTTPS_PROXY 等环境变量
+        s.trust_env = trust_env
+        if not trust_env:
+            s.proxies = {"http": None, "https": None}
+        s.headers.update({
             "User-Agent": random.choice(USER_AGENTS),
             "Accept": "*/*",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Referer": "https://quote.eastmoney.com/",
             "Connection": "keep-alive",
         })
+        return s
+
+    def _switch_proxy_mode(self) -> bool:
+        """在直连/代理之间切换，返回是否真的切了"""
+        if self._use_proxy is not None:
+            return False        # 用户明确指定了模式，不自动切
+        if self._proxy_mode == "direct":
+            self._proxy_mode = "proxy"
+            self._session = self._make_session(trust_env=True)
+            logger.info("东财直连失败，改用系统代理重试")
+        else:
+            self._proxy_mode = "direct"
+            self._session = self._make_session(trust_env=False)
+            logger.info("东财走代理失败，改为绕过代理直连")
+        return True
 
     def _pace(self):
         elapsed = time.time() - self._last_call
@@ -99,9 +132,21 @@ class EastmoneyClient:
         self._pace()
         # 每次换个 UA，降低被识别为脚本的概率
         self._session.headers["User-Agent"] = random.choice(USER_AGENTS)
-        resp = self._session.get(url, params=params, timeout=self.timeout)
-        resp.raise_for_status()
-        return resp.json()
+        try:
+            resp = self._session.get(url, params=params, timeout=self.timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.exceptions.ProxyError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.SSLError) as e:
+            # 代理相关失败：换一种模式重试一次
+            if not self._switch_proxy_mode():
+                raise
+            logger.debug(f"东财请求失败({type(e).__name__})，切换模式重试")
+            self._session.headers["User-Agent"] = random.choice(USER_AGENTS)
+            resp = self._session.get(url, params=params, timeout=self.timeout)
+            resp.raise_for_status()
+            return resp.json()
 
     # ═══════════════════════════════════════
     def get_kline(self, code: str, ktype: str,

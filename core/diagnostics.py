@@ -148,37 +148,65 @@ def run_diagnostics(progress: Optional[Callable[[str], None]] = None,
 
     # ── 网络 ──
     if check_network:
-        step("测试东方财富连通性...")
-        try:
-            import requests
-            t = time.perf_counter()
-            r = requests.get(
-                "https://push2his.eastmoney.com/api/qt/stock/kline/get",
-                params={"secid": "0.159338", "klt": "101", "fqt": "1",
-                        "fields1": "f1,f2,f3,f4,f5,f6",
-                        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
-                        "ut": "7eea3edcaed734bea9cbfc24409ed989",
-                        "beg": "0", "end": "20500000"},
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                  "Chrome/122.0.0.0 Safari/537.36",
-                    "Referer": "https://quote.eastmoney.com/"},
-                timeout=12)
-            cost = time.perf_counter() - t
-            klines = ((r.json().get("data") or {}).get("klines")) or []
-            if klines:
-                rep.eastmoney_ok = True
-                rep.add("行情源", Check(
-                    "东方财富", OK,
-                    f"{cost:.1f}s · 返回 {len(klines):,} 条 · 最新 {klines[-1][:20]}"))
-            else:
-                rep.add("行情源", Check(
-                    "东方财富", WARN, f"有响应但无数据: {str(r.text)[:100]}"))
-        except Exception as e:
+        import os
+        # 先报告代理环境，很多连通性问题就出在这
+        proxy_env = {k: v for k, v in os.environ.items()
+                     if k.lower() in ("http_proxy", "https_proxy", "all_proxy")}
+        if proxy_env:
+            shown = ", ".join(f"{k}={v}" for k, v in list(proxy_env.items())[:2])
             rep.add("行情源", Check(
-                "东方财富", FAIL, f"{type(e).__name__}: {str(e)[:110]}",
-                "A股数据将无法下载，检查网络 / VPN / 防火墙"))
+                "系统代理", INFO, shown,
+                "东财是国内服务，走海外代理会失败；程序会自动绕过代理直连"))
+
+        params = {"secid": "0.159338", "klt": "101", "fqt": "1",
+                  "fields1": "f1,f2,f3,f4,f5,f6",
+                  "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+                  "ut": "7eea3edcaed734bea9cbfc24409ed989",
+                  "beg": "0", "end": "20500000"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/122.0.0.0 Safari/537.36",
+            "Referer": "https://quote.eastmoney.com/"}
+
+        # 直连和走代理各测一次，明确告诉用户哪条路通
+        for mode, trust_env in (("直连（绕过代理）", False), ("走系统代理", True)):
+            step(f"测试东方财富 {mode}...")
+            try:
+                import requests
+                s = requests.Session()
+                s.trust_env = trust_env
+                if not trust_env:
+                    s.proxies = {"http": None, "https": None}
+                t = time.perf_counter()
+                r = s.get("https://push2his.eastmoney.com/api/qt/stock/kline/get",
+                          params=params, headers=headers, timeout=12)
+                cost = time.perf_counter() - t
+                klines = ((r.json().get("data") or {}).get("klines")) or []
+                if klines:
+                    rep.eastmoney_ok = True
+                    rep.add("行情源", Check(
+                        f"东方财富 · {mode}", OK,
+                        f"{cost:.1f}s · 返回 {len(klines):,} 条 · "
+                        f"最新 {klines[-1][:20]}"))
+                else:
+                    rep.add("行情源", Check(
+                        f"东方财富 · {mode}", WARN,
+                        f"有响应但无数据: {str(r.text)[:80]}"))
+            except Exception as e:
+                rep.add("行情源", Check(
+                    f"东方财富 · {mode}", FAIL,
+                    f"{type(e).__name__}: {str(e)[:90]}"))
+            finally:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+
+        if not rep.eastmoney_ok:
+            rep.add("行情源", Check(
+                "结论", FAIL, "两种方式均不可用",
+                "关闭 VPN/代理后重试，或改用其他行情源"))
 
     step("完成")
     return rep
