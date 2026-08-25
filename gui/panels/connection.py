@@ -416,6 +416,17 @@ class ConnectionPanel(BasePanel):
             self._terminal.append(f'配置保存失败: {e}')
 
         self._launch_btn.setEnabled(False)
+
+        # 告知凭据会写到哪，方便排查自动登录是否生效
+        from core.opend_launcher import find_config_file
+        cfg_file = find_config_file(Path(exe))
+        if cfg_file:
+            self._terminal.append(f"OpenD 配置: {cfg_file}")
+            self._terminal.append("将把账号密码写入该配置，实现自动登录")
+        else:
+            self._terminal.append(
+                "未找到 FutuOpenD.xml —— OpenD 可能仍会要求手动登录")
+
         self._terminal.append("正在启动 OpenD...")
 
         host = self._main.config.get("opend", "host", default="127.0.0.1")

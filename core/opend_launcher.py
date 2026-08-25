@@ -72,6 +72,87 @@ def md5_password(pwd: str) -> str:
     return hashlib.md5(pwd.encode("utf-8")).hexdigest()
 
 
+def find_config_file(exe_path: Path) -> Optional[Path]:
+    """
+    定位 FutuOpenD.xml。
+
+    macOS 上可执行文件在 .app 包内三层深，配置文件通常在包外同级目录：
+        Futu_OpenD_x.x.x_Mac/
+            FutuOpenD.xml            <- 这里
+            FutuOpenD.app/Contents/MacOS/FutuOpenD
+    """
+    exe = Path(exe_path)
+    candidates = []
+
+    # 从可执行文件往上找若干层
+    parent = exe.parent
+    for _ in range(5):
+        candidates.append(parent / "FutuOpenD.xml")
+        candidates.append(parent / "OpenD.xml")
+        if parent.parent == parent:
+            break
+        parent = parent.parent
+
+    for c in candidates:
+        if c.is_file():
+            return c.resolve()
+    return None
+
+
+def write_config_credentials(cfg_path: Path, account: str, pwd_md5: str,
+                             api_ip: str = None, api_port: int = None,
+                             lang: str = None) -> bool:
+    """
+    把账号密码写进 FutuOpenD.xml，让 OpenD 启动时自动登录。
+
+    macOS 上 .app 运行时路径会被随机化，OpenD 找不到自己的配置文件，
+    因此「记住密码」存不住、命令行参数也常常不生效。把凭据直接写进
+    配置文件、再用 -cfg_file 指定绝对路径，是官方文档给的解法。
+
+    Returns:
+        是否写入成功
+    """
+    import xml.etree.ElementTree as ET
+
+    cfg_path = Path(cfg_path)
+    try:
+        tree = ET.parse(cfg_path)
+        root = tree.getroot()
+
+        def set_field(name, value):
+            if value is None or value == "":
+                return
+            node = root.find(name)
+            if node is None:
+                node = ET.SubElement(root, name)
+            node.text = str(value)
+
+        set_field("login_account", account)
+        set_field("login_pwd_md5", pwd_md5)
+        # 明文密码字段清空，避免和密文冲突（文档：两者都在时只用密文）
+        plain = root.find("login_pwd")
+        if plain is not None:
+            plain.text = ""
+        set_field("ip", api_ip)
+        set_field("api_port", api_port)
+        set_field("lang", lang)
+
+        # 先备份原文件，避免写坏了没法回退
+        backup = cfg_path.with_suffix(".xml.bak")
+        if not backup.exists():
+            try:
+                backup.write_bytes(cfg_path.read_bytes())
+            except Exception:
+                pass
+
+        tree.write(cfg_path, encoding="utf-8", xml_declaration=True)
+        logger.info(f"已写入 OpenD 配置: {cfg_path}")
+        return True
+    except Exception as e:
+        logger.warning(f"写入 OpenD 配置失败 ({cfg_path}): {e}")
+        return False
+
+
 def discover_opend(base_dir: Optional[Path] = None) -> Optional[Path]:
     """
     在项目目录下自动发现 OpenD 可执行文件。
@@ -133,6 +214,7 @@ class OpenDLauncher:
         self._on_output: Optional[Callable[[str], None]] = None
         self._needs_verify: bool = False
         self._logged_in: bool = False
+        self._cfg_file: Optional[Path] = None
 
     # ─── 路径管理 ───
     @property
@@ -189,13 +271,30 @@ class OpenDLauncher:
 
         args = [str(self._exe_path)]
 
+        pwd_md5 = ""
+        if password:
+            pwd_md5 = password if password_is_md5 else md5_password(password)
+
+        # 把凭据写进 FutuOpenD.xml 并用 -cfg_file 指定绝对路径。
+        # macOS 上 .app 路径会被随机化，OpenD 找不到自己的配置文件，
+        # 只靠命令行参数经常仍会弹交互式登录。
+        cfg_file = find_config_file(self._exe_path)
+        if cfg_file and account and pwd_md5:
+            if write_config_credentials(cfg_file, account, pwd_md5,
+                                        api_ip=api_ip, api_port=api_port,
+                                        lang=lang):
+                self._cfg_file = cfg_file
+                args.append(f"-cfg_file={cfg_file}")
+        elif cfg_file:
+            args.append(f"-cfg_file={cfg_file}")
+        else:
+            logger.warning("未找到 FutuOpenD.xml，OpenD 可能会要求交互式登录")
+
+        # 命令行参数优先级高于配置文件，两条路都给上
         if account:
             args.append(f"-login_account={account}")
-        if password:
-            if password_is_md5:
-                args.append(f"-login_pwd_md5={password}")
-            else:
-                args.append(f"-login_pwd_md5={md5_password(password)}")
+        if pwd_md5:
+            args.append(f"-login_pwd_md5={pwd_md5}")
 
         args.append(f"-api_ip={api_ip}")
         args.append(f"-api_port={api_port}")
