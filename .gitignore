@@ -6,9 +6,12 @@ dist/
 build/
 *.egg
 
-# 数据目录（不提交数据库和导出文件）
-data/
+# 数据目录：排除内容而非目录本身，否则下面的例外规则不会生效
+data/*
 logs/
+
+# 备份目录例外 —— Parquet 压缩后体积小，可进 git 用于跨设备同步
+!data/backup/
 
 # IDE
 .vscode/
