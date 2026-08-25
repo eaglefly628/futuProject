@@ -355,6 +355,24 @@ class ConnectionPanel(BasePanel):
 
     # ─── 启动 + 连接 ───
     def _on_launch_and_connect(self):
+        host = self._main.config.get("opend", "host", default="127.0.0.1")
+        port = self._port_spin.value()
+
+        # 端口已被占用：多半是之前启动的 OpenD 还在跑。
+        # 此时再拉一个新实例会因端口冲突立刻退出，直接复用已有的即可。
+        if not self._launcher.is_running() and self._probe_port(host, port):
+            choice = QMessageBox.question(
+                self, "OpenD 已在运行",
+                f"{host}:{port} 已有服务在监听，可能是之前启动的 OpenD。\n\n"
+                f"再启动一个新实例会因端口冲突立即退出。\n\n"
+                f"是 —— 直接连接已有的 OpenD（推荐）\n"
+                f"否 —— 取消，我先手动处理",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if choice == QMessageBox.Yes:
+                self._terminal.append("检测到 OpenD 已在运行，直接连接")
+                self._on_connect()
+            return
+
         exe = self._exe_input.text().strip()
         if not exe:
             QMessageBox.warning(self, "缺少路径",

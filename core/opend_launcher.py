@@ -364,19 +364,39 @@ class OpenDLauncher:
         """
         import socket
         deadline = time.time() + timeout
+        port_seen = False
+
         while time.time() < deadline:
-            if not self.is_running():
-                logger.error("OpenD 进程已退出")
-                return False
             # 等待手机验证码时不要空耗超时，交给上层处理
             if self._needs_verify and not self._logged_in:
                 logger.info("OpenD 正在等待手机验证码")
                 return False
+
+            alive = self.is_running()
             try:
                 with socket.create_connection((host, port), timeout=1.0):
-                    logger.info(f"OpenD 端口就绪: {host}:{port}")
-                    return True
+                    port_seen = True
             except (OSError, socket.timeout):
-                time.sleep(0.5)
+                port_seen = False
+
+            if not alive:
+                # 进程没了但端口还在 —— 说明监听方是别的实例，
+                # 我们这个多半因端口冲突退出了
+                if port_seen:
+                    raise RuntimeError(
+                        f"OpenD 进程已退出，但 {host}:{port} 仍被占用。\n"
+                        f"通常是之前启动的 OpenD 还在运行导致端口冲突。\n"
+                        f"可直接点「仅连接」使用已有实例，"
+                        f"或先关掉旧实例（pkill -f FutuOpenD）再重试。")
+                raise RuntimeError(
+                    "OpenD 进程已退出。请查看下方终端输出确认原因"
+                    "（勾选「显示 OpenD 控制台窗口」可看到完整信息）。")
+
+            if port_seen:
+                logger.info(f"OpenD 端口就绪: {host}:{port}")
+                return True
+
+            time.sleep(0.5)
+
         logger.warning(f"等待 OpenD 端口超时: {host}:{port}")
         return False
