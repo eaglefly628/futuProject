@@ -129,8 +129,9 @@ class AkshareSource:
         self.interval = max(MIN_GAP,
                             float(config.get("kline", "request_interval", default=0.8)))
         self._last_call = 0.0
+        self.last_source = ""
 
-        # 东财直连客户端（主路径）
+        # 东财直连（主路径，需要国内网络）
         try:
             from downloaders.eastmoney import EastmoneyClient
             self._em = EastmoneyClient(min_gap=self.interval)
@@ -138,9 +139,17 @@ class AkshareSource:
             logger.warning(f"东财直连不可用: {e}")
             self._em = None
 
-        if self._em is None and not akshare_available():
+        # Yahoo（备用路径，走海外网络。本机挂 VPN/网卡代理时反而是它通）
+        try:
+            from downloaders.yahoo import YahooClient
+            self._yahoo = YahooClient(min_gap=self.interval)
+        except Exception as e:
+            logger.warning(f"Yahoo 源不可用: {e}")
+            self._yahoo = None
+
+        if self._em is None and self._yahoo is None and not akshare_available():
             raise ImportError(
-                "无可用A股数据源。请安装依赖:  pip install requests akshare")
+                "无可用A股数据源。请安装依赖:  pip install requests")
 
     def _pace(self):
         """限流：保证相邻请求之间有最小间隔"""
@@ -192,7 +201,8 @@ class AkshareSource:
         last_err = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                df = self._fetch(bare, ktype_str, start_date, end_date)
+                df = self._fetch(bare, ktype_str, start_date, end_date,
+                                 code_full=code)
                 break
             except Exception as e:
                 last_err = e
@@ -228,16 +238,31 @@ class AkshareSource:
 
     # ─── 实际抓取 ───
     def _fetch(self, bare: str, ktype_str: str,
-               start_date: str, end_date: str) -> Optional[pd.DataFrame]:
-        # 优先走东财直连（自带浏览器请求头，不需要额外的 market_id 查询）
+               start_date: str, end_date: str,
+               code_full: str = "") -> Optional[pd.DataFrame]:
+        # 1) 东财直连（国内网络时最好，分钟线历史最全）
         if self._em is not None:
             try:
                 df = self._em.get_kline(bare, ktype_str, start_date, end_date)
                 if df is not None and not df.empty:
+                    self.last_source = "东财"
                     return self._normalize_em(df)
-                logger.debug(f"[东财直连] {bare} {ktype_str} 无数据，回退 akshare")
+                logger.debug(f"[东财] {bare} {ktype_str} 无数据，尝试下一个源")
             except Exception as e:
-                logger.warning(f"[东财直连] {bare} {ktype_str} 失败({type(e).__name__})，回退 akshare")
+                logger.warning(
+                    f"[东财] {bare} {ktype_str} 失败({type(e).__name__})，尝试下一个源")
+
+        # 2) Yahoo（挂海外代理时这条通）
+        if self._yahoo is not None:
+            try:
+                df = self._yahoo.get_kline(code_full, ktype_str, start_date, end_date)
+                if df is not None and not df.empty:
+                    self.last_source = "Yahoo"
+                    return df        # YahooClient 已按本项目 schema 返回
+                logger.debug(f"[Yahoo] {bare} {ktype_str} 无数据，尝试下一个源")
+            except Exception as e:
+                logger.warning(
+                    f"[Yahoo] {bare} {ktype_str} 失败({type(e).__name__})，尝试下一个源")
 
         ak = _get_ak()
         if ak is None:
