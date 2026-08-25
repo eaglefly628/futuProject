@@ -17,6 +17,8 @@ class ConnectionPanel(BasePanel):
         super().__init__(main_window, "连接管理", "启动 OpenD 网关并建立连接")
         self._worker = None
         self._launcher = None
+        self._verify_timer = None
+        self._verify_elapsed = 0
         self._build()
         self._init_launcher()
 
@@ -169,14 +171,14 @@ class ConnectionPanel(BasePanel):
         cfg_layout.addLayout(btn_row)
         self.add_widget(cfg_card)
 
-        # ─── 日志 ───
-        log_card, log_layout = self.make_card("运行日志")
-        self._log = QTextEdit()
-        self._log.setObjectName("logPanel")
-        self._log.setReadOnly(True)
-        log_layout.addWidget(self._log)
-        self.add_widget(log_card)
-        self._content_layout.setStretchFactor(log_card, 1)
+        # ─── OpenD 终端 ───
+        from gui.widgets.terminal import OpenDTerminal
+        term_card, term_layout = self.make_card(
+            "OpenD 终端  ·  可直接输入命令（如手机验证码）")
+        self._terminal = OpenDTerminal()
+        term_layout.addWidget(self._terminal)
+        self.add_widget(term_card)
+        self._content_layout.setStretchFactor(term_card, 1)
 
     # ═══════════════════════════════════════
     def _init_launcher(self):
@@ -186,17 +188,16 @@ class ConnectionPanel(BasePanel):
         cfg = self._main.config
         exe_path = cfg.get("opend", "exe_path", default="")
         self._launcher = OpenDLauncher(exe_path or None)
+        self._terminal.attach(self._launcher)
 
         if not exe_path:
             if self._launcher.auto_discover():
                 self._exe_input.setText(str(self._launcher.exe_path))
-                self._log.append(
-                    f'<span style="color:{COLORS["green"]}">✓ 自动发现 OpenD: '
-                    f'{self._launcher.exe_path}</span>')
+                self._terminal.append(f'✓ 自动发现 OpenD: '
+                    f'{self._launcher.exe_path}')
             else:
-                self._log.append(
-                    f'<span style="color:{COLORS["yellow"]}">⚠ 未在项目目录下找到 OpenD，'
-                    f'请手动指定路径或将 OpenD 放入 FutuOpenD/ 目录</span>')
+                self._terminal.append(f'⚠ 未在项目目录下找到 OpenD，'
+                    f'请手动指定路径或将 OpenD 放入 FutuOpenD/ 目录')
         else:
             self._exe_input.setText(exe_path)
 
@@ -244,11 +245,10 @@ class ConnectionPanel(BasePanel):
             return
         self._exe_input.setText(str(found[0]))
         self._launcher.set_exe_path(str(found[0]))
-        self._log.append(f'<span style="color:{COLORS["green"]}">✓ 已选择: {found[0]}</span>')
+        self._terminal.append(f'✓ 已选择: {found[0]}')
         if len(found) > 1:
-            self._log.append(
-                f'<span style="color:{COLORS["text_muted"]}">（共发现 {len(found)} 个，'
-                f'如需切换请用「浏览...」）</span>')
+            self._terminal.append(f'（共发现 {len(found)} 个，'
+                f'如需切换请用「浏览...」）')
         self._update_status_display()
 
     # ─── 状态显示 ───
@@ -332,11 +332,10 @@ class ConnectionPanel(BasePanel):
         try:
             self._main.config.save_local(local_cfg)
         except Exception as e:
-            self._log.append(
-                f'<span style="color:{COLORS["yellow"]}">配置保存失败: {e}</span>')
+            self._terminal.append(f'配置保存失败: {e}')
 
         self._launch_btn.setEnabled(False)
-        self._log.append("正在启动 OpenD...")
+        self._terminal.append("正在启动 OpenD...")
 
         host = self._main.config.get("opend", "host", default="127.0.0.1")
         launcher = self._launcher
@@ -352,13 +351,15 @@ class ConnectionPanel(BasePanel):
                 api_ip=host,
                 lang=lang,
                 show_console=show_console,
-                on_output=lambda line: worker.progress.emit(f"[OpenD] {line}"),
+                on_output=lambda line: worker.progress.emit(line),
             )
             worker.progress.emit("等待 OpenD 就绪...")
             if not launcher.wait_until_ready(host, port, timeout=45.0):
+                if launcher.needs_verify:
+                    raise RuntimeError("__NEED_VERIFY__")
                 raise RuntimeError(
-                    "OpenD 启动后端口未就绪（可能是账号密码错误或需要验证码，"
-                    "请勾选「显示 OpenD 控制台窗口」重试查看详情）")
+                    "OpenD 启动后端口未就绪。请查看下方终端输出，"
+                    "必要时在终端里直接输命令处理。")
 
             worker.progress.emit("OpenD 就绪，正在连接 API...")
             from core.client import FutuClient
@@ -374,10 +375,53 @@ class ConnectionPanel(BasePanel):
         worker.start()
 
     def _on_log(self, msg: str):
-        self._log.append(msg)
+        self._terminal.append(msg)
+
+    def _wait_for_login_then_connect(self):
+        """等待终端里完成验证码登录，登录成功后自动连接 API"""
+        host = self._main.config.get("opend", "host", default="127.0.0.1")
+        port = self._port_spin.value()
+        launcher = self._launcher
+
+        if self._verify_timer is not None:
+            self._verify_timer.stop()
+
+        self._verify_timer = QTimer(self)
+        self._verify_elapsed = 0
+
+        def check():
+            self._verify_elapsed += 1
+            if not launcher.is_running():
+                self._verify_timer.stop()
+                self._terminal.append("[提示] OpenD 已退出")
+                self._launch_btn.setEnabled(True)
+                return
+            if launcher.logged_in:
+                self._verify_timer.stop()
+                self._terminal.append("[提示] 检测到登录成功，正在连接 API...")
+                self._on_connect()
+                return
+            if self._verify_elapsed > 300:  # 5 分钟
+                self._verify_timer.stop()
+                self._terminal.append("[提示] 等待登录超时，可手动点「仅连接」")
+                self._launch_btn.setEnabled(True)
+
+        self._verify_timer.timeout.connect(check)
+        self._verify_timer.start(1000)
 
     def _on_launch_error(self, msg: str):
-        self._log.append(f'<span style="color:{COLORS["red"]}">❌ 启动失败: {msg}</span>')
+        # 需要手机验证码：不算失败，引导用户在终端里输入
+        if "__NEED_VERIFY__" in msg:
+            self._terminal.append("")
+            self._terminal.append("需要手机验证码 —— 请在下方终端输入框执行：")
+            self._terminal.append("    input_phone_verify_code -code=你收到的验证码")
+            self._terminal.append("（验证通过后会自动连接 API）")
+            self._terminal.focus_input()
+            self._terminal._input.setText("input_phone_verify_code -code=")
+            self._wait_for_login_then_connect()
+            return
+
+        self._terminal.append(f'❌ 启动失败: {msg}')
         self._main.log(f"OpenD 启动失败: {msg}")
         self._launch_btn.setEnabled(True)
         self._update_opend_status()
@@ -386,13 +430,13 @@ class ConnectionPanel(BasePanel):
         if self._main.is_connected:
             self._on_disconnect()
         if self._launcher and self._launcher.stop():
-            self._log.append("OpenD 已停止")
+            self._terminal.append("OpenD 已停止")
         self._update_opend_status()
         self._update_status_display()
 
     # ─── 仅连接 ───
     def _on_connect(self):
-        self._log.append("正在连接 Futu OpenD...")
+        self._terminal.append("正在连接 Futu OpenD...")
         self._connect_btn.setEnabled(False)
 
         host = self._main.config.get("opend", "host", default="127.0.0.1")
@@ -433,16 +477,15 @@ class ConnectionPanel(BasePanel):
 
         self._main.set_connected(True)
 
-        self._log.append(f'<span style="color:{COLORS["green"]}">✅ 连接成功！</span>')
+        self._terminal.append(f'✅ 连接成功！')
         self._main.log("Futu OpenD 连接成功")
         self._update_status_display()
         self._update_opend_status()
 
     def _on_connect_error(self, msg):
-        self._log.append(f'<span style="color:{COLORS["red"]}">❌ 连接失败: {msg}</span>')
-        self._log.append(
-            f'<span style="color:{COLORS["text_muted"]}">'
-            f'请确认 OpenD 已启动，或使用上方「启动 OpenD 并连接」</span>')
+        self._terminal.append(f'❌ 连接失败: {msg}')
+        self._terminal.append(f''
+            f'请确认 OpenD 已启动，或使用上方「启动 OpenD 并连接」')
         self._main.log(f"连接失败: {msg}")
         self._connect_btn.setEnabled(True)
         self._launch_btn.setEnabled(True)
@@ -455,6 +498,6 @@ class ConnectionPanel(BasePanel):
                 pass
             self._main.client = None
         self._main.set_connected(False)
-        self._log.append("已断开 API 连接")
+        self._terminal.append("已断开 API 连接")
         self._main.log("已断开 Futu OpenD 连接")
         self._update_status_display()

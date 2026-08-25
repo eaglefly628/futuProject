@@ -87,6 +87,8 @@ class OpenDLauncher:
         self._output_lines: List[str] = []
         self._reader_thread: Optional[threading.Thread] = None
         self._on_output: Optional[Callable[[str], None]] = None
+        self._needs_verify: bool = False
+        self._logged_in: bool = False
 
     # ─── 路径管理 ───
     @property
@@ -158,6 +160,8 @@ class OpenDLauncher:
 
         self._on_output = on_output
         self._output_lines = []
+        self._needs_verify = False
+        self._logged_in = False
 
         # 工作目录设为 OpenD 所在目录（它需要读同目录的 FutuOpenD.xml / Appdata.dat）
         cwd = str(self._exe_path.parent)
@@ -177,7 +181,7 @@ class OpenDLauncher:
                 cwd=cwd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE,   # 保留输入通道，用于应答验证码等交互
                 text=True,
                 bufsize=1,
                 encoding="utf-8",
@@ -193,24 +197,93 @@ class OpenDLauncher:
         return True
 
     def _read_output(self):
-        """后台读取 OpenD 输出"""
+        """后台读取 OpenD 输出（按字符读，兼容无换行的 >>> 提示符）"""
         if not self._process or not self._process.stdout:
             return
+        buf = ""
         try:
-            for line in self._process.stdout:
-                line = line.rstrip()
-                if not line:
+            while True:
+                ch = self._process.stdout.read(1)
+                if ch == "":
+                    break
+                if ch in ("\n", "\r"):
+                    if buf.strip():
+                        self._emit_line(buf.rstrip())
+                    buf = ""
                     continue
-                self._output_lines.append(line)
-                if len(self._output_lines) > 500:
-                    self._output_lines = self._output_lines[-500:]
-                if self._on_output:
-                    try:
-                        self._on_output(line)
-                    except Exception:
-                        pass
+                buf += ch
+                # OpenD 的输入提示符不带换行，读到就先吐出去
+                if buf.endswith(">>>"):
+                    self._emit_line(buf)
+                    buf = ""
         except Exception as e:
             logger.debug(f"读取 OpenD 输出结束: {e}")
+        finally:
+            if buf.strip():
+                self._emit_line(buf.rstrip())
+
+    def _emit_line(self, line: str):
+        """记录并分发一行输出"""
+        self._output_lines.append(line)
+        if len(self._output_lines) > 1000:
+            self._output_lines = self._output_lines[-1000:]
+
+        # 状态识别
+        if "登录成功" in line:
+            self._logged_in = True
+            self._needs_verify = False
+        elif "需要手机验证码" in line or "req_phone_verify_code" in line:
+            self._needs_verify = True
+        elif "登录失败" in line or "密码不匹配" in line:
+            self._logged_in = False
+
+        if self._on_output:
+            try:
+                self._on_output(line)
+            except Exception:
+                pass
+
+    # ─── 交互 ───
+    def send_command(self, cmd: str) -> bool:
+        """
+        向 OpenD 控制台发送一行命令。
+
+        常用命令:
+            input_phone_verify_code -code=123456   提交手机验证码
+            help                                    命令列表
+            exit                                    退出 OpenD
+        """
+        if not self.is_running() or not self._process.stdin:
+            logger.warning("OpenD 未运行，无法发送命令")
+            return False
+        try:
+            self._process.stdin.write(cmd + "\n")
+            self._process.stdin.flush()
+            safe = cmd if "pwd" not in cmd.lower() else "***"
+            logger.info(f"发送 OpenD 命令: {safe}")
+            self._emit_line(f">>> {safe}")
+            return True
+        except Exception as e:
+            logger.error(f"发送命令失败: {e}")
+            return False
+
+    def submit_verify_code(self, code: str) -> bool:
+        """提交手机验证码"""
+        return self.send_command(f"input_phone_verify_code -code={code.strip()}")
+
+    def request_verify_code(self) -> bool:
+        """请求重发手机验证码"""
+        return self.send_command("req_phone_verify_code")
+
+    @property
+    def needs_verify(self) -> bool:
+        """是否正在等待手机验证码"""
+        return getattr(self, "_needs_verify", False)
+
+    @property
+    def logged_in(self) -> bool:
+        """OpenD 是否已登录成功"""
+        return getattr(self, "_logged_in", False)
 
     def stop(self, timeout: float = 5.0) -> bool:
         """停止 OpenD 进程"""
@@ -250,6 +323,10 @@ class OpenDLauncher:
         while time.time() < deadline:
             if not self.is_running():
                 logger.error("OpenD 进程已退出")
+                return False
+            # 等待手机验证码时不要空耗超时，交给上层处理
+            if self._needs_verify and not self._logged_in:
+                logger.info("OpenD 正在等待手机验证码")
                 return False
             try:
                 with socket.create_connection((host, port), timeout=1.0):
