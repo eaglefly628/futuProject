@@ -1,4 +1,5 @@
 """连接管理面板 - OpenD 一键启动 + 连接"""
+import time
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -153,7 +154,10 @@ class ConnectionPanel(BasePanel):
         self._lang_combo.setMaximumWidth(110)
         opt_row.addWidget(self._lang_combo)
 
-        self._console_check = QCheckBox("显示 OpenD 控制台窗口")
+        self._console_check = QCheckBox("同时弹出 OpenD 独立窗口")
+        self._console_check.setToolTip(
+            "OpenD 输出始终会显示在下方终端里。\n"
+            "勾选此项会额外弹出 OpenD 自己的窗口。")
         opt_row.addWidget(self._console_check)
         opt_row.addStretch()
         grid.addLayout(opt_row, 3, 1)
@@ -438,7 +442,26 @@ class ConnectionPanel(BasePanel):
                     "OpenD 启动后端口未就绪。请查看下方终端输出，"
                     "必要时在终端里直接输命令处理。")
 
-            worker.progress.emit("OpenD 就绪，正在连接 API...")
+            # 端口开了不等于登录完成。未登录时 connect_quote() 会一直挂着，
+            # 所以先等登录确认，超时就把原因说清楚。
+            worker.progress.emit("等待 OpenD 登录...")
+            login_deadline = time.time() + 60
+            while time.time() < login_deadline:
+                if launcher.logged_in:
+                    break
+                if launcher.needs_verify:
+                    raise RuntimeError("__NEED_VERIFY__")
+                if not launcher.is_running():
+                    raise RuntimeError("OpenD 进程已退出，请查看终端输出")
+                time.sleep(0.5)
+            else:
+                raise RuntimeError(
+                    "等待登录超时。OpenD 端口已开但未确认登录成功。\n"
+                    "请查看下方终端输出：若提示需要验证码，"
+                    "在输入框执行 input_phone_verify_code -code=你的验证码；\n"
+                    "若账号密码有误，请更正后重试。")
+
+            worker.progress.emit("登录成功，正在连接 API...")
             from core.client import FutuClient
             client = FutuClient(host=host, port=port)
             client.connect_quote()

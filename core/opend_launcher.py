@@ -200,7 +200,10 @@ class OpenDLauncher:
         args.append(f"-api_ip={api_ip}")
         args.append(f"-api_port={api_port}")
         args.append(f"-lang={lang}")
-        args.append(f"-console={1 if show_console else 0}")
+        # 必须开控制台：登录进度、验证码提示都走它，
+        # 关掉的话 stdout 收不到任何交互信息，界面只能干等。
+        # 输出已经重定向到本程序的终端组件，不会额外弹窗。
+        args.append("-console=1")
 
         self._on_output = on_output
         self._output_lines = []
