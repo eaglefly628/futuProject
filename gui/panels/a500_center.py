@@ -63,10 +63,15 @@ class A500CenterPanel(BasePanel):
 
         toolbar.addWidget(QLabel("标的:"))
         self._code_combo = QComboBox()
+        self._code_combo.setEditable(True)
+        self._code_combo.setInsertPolicy(QComboBox.NoInsert)
         for code, name in A500_ETFS:
             self._code_combo.addItem(f"{name}  [{code}]", code)
-        self._code_combo.setMinimumWidth(240)
+        self._code_combo.setMinimumWidth(260)
+        self._code_combo.lineEdit().setPlaceholderText("选择或输入代码，如 SZ.159338")
         self._code_combo.currentIndexChanged.connect(self._on_code_changed)
+        # 回车确认手输代码
+        self._code_combo.lineEdit().returnPressed.connect(self._on_code_changed)
         toolbar.addWidget(self._code_combo)
 
         toolbar.addWidget(QLabel("周期:"))
@@ -340,7 +345,48 @@ class A500CenterPanel(BasePanel):
         self._refresh_coverage()
 
     def _current_code(self) -> str:
-        return self._code_combo.currentData()
+        """取当前标的代码：优先匹配下拉项，否则解析手输文本"""
+        text = self._code_combo.currentText().strip()
+
+        # 文本与某个下拉项一致 -> 用它的 data
+        idx = self._code_combo.findText(text)
+        if idx >= 0:
+            data = self._code_combo.itemData(idx)
+            if data:
+                return data
+
+        if not text:
+            return ""
+
+        # 形如 "名称  [SZ.159338]" -> 取方括号内
+        if "[" in text and "]" in text:
+            inner = text[text.rfind("[") + 1:text.rfind("]")].strip()
+            if inner:
+                return self._normalize_code(inner)
+
+        return self._normalize_code(text)
+
+    @staticmethod
+    def _normalize_code(raw: str) -> str:
+        """把 159338 / sz159338 / SZ.159338 统一成 Futu 格式 SZ.159338"""
+        c = raw.strip().upper().replace(" ", "")
+        if not c:
+            return ""
+        if "." in c:
+            return c
+        for prefix in ("SZ", "SH", "HK", "US"):
+            if c.startswith(prefix) and len(c) > len(prefix):
+                return f"{prefix}.{c[len(prefix):]}"
+        # 纯数字：按 A 股代码规则推断交易所
+        if c.isdigit():
+            if len(c) == 6:
+                return f"{'SH' if c[0] in '69' or c.startswith('5') else 'SZ'}.{c}"
+            if len(c) == 5:
+                return f"HK.{c}"
+        # 纯字母按美股处理
+        if c.isalpha():
+            return f"US.{c}"
+        return c
 
     def _on_code_changed(self):
         self._refresh_chart()
