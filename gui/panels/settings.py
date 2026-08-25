@@ -94,7 +94,125 @@ class SettingsPanel(BasePanel):
         btn_row.addStretch()
         btn_row.addWidget(self.make_primary_btn("💾 保存配置", self._on_save))
         self.add_layout(btn_row)
-        self.add_stretch()
+
+        # ─── 环境诊断 ───
+        diag_card, diag_layout = self.make_card(
+            "🩺 环境诊断  ·  一键检查依赖、配置、OpenD、行情源连通性")
+
+        diag_btn_row = QHBoxLayout()
+        diag_btn_row.setContentsMargins(0, 0, 0, 0)
+        self._diag_btn = self.make_primary_btn("🩺 开始检测", self._on_diagnose)
+        diag_btn_row.addWidget(self._diag_btn)
+
+        self._diag_net_check = QCheckBox("包含网络测试（较慢）")
+        self._diag_net_check.setChecked(True)
+        diag_btn_row.addWidget(self._diag_net_check)
+
+        self._diag_status = QLabel()
+        self._diag_status.setStyleSheet(
+            f"color:{COLORS['text_secondary']}; font-size:12px;")
+        diag_btn_row.addWidget(self._diag_status)
+        diag_btn_row.addStretch()
+        diag_layout.addLayout(diag_btn_row)
+
+        from PySide6.QtWidgets import QTextEdit
+        self._diag_out = QTextEdit()
+        self._diag_out.setMinimumHeight(280)
+        self._diag_out.setObjectName("logPanel")
+        self._diag_out.setReadOnly(True)
+        self._diag_out.setPlaceholderText("点「开始检测」查看环境状况")
+        diag_layout.addWidget(self._diag_out)
+
+        self.add_widget(diag_card)
+        self._content_layout.setStretchFactor(diag_card, 1)
+
+    # ═══════════════════════════════════════
+    #  环境诊断
+    # ═══════════════════════════════════════
+    def _on_diagnose(self):
+        from gui.widgets.worker import WorkerThread
+        from core.diagnostics import run_diagnostics
+
+        self._diag_btn.setEnabled(False)
+        self._diag_out.clear()
+        self._diag_status.setText("检测中...")
+        want_net = self._diag_net_check.isChecked()
+
+        worker = WorkerThread(lambda: None)
+        worker._func = lambda: run_diagnostics(
+            progress=lambda m: worker.progress.emit(m),
+            check_network=want_net)
+        self._diag_worker = worker
+        worker.progress.connect(self._diag_status.setText)
+        worker.finished_ok.connect(self._on_diagnose_done)
+        worker.error.connect(self._on_diagnose_error)
+        worker.start()
+
+    def _on_diagnose_done(self, rep):
+        from core.diagnostics import OK, WARN, FAIL, INFO
+
+        self._diag_btn.setEnabled(True)
+        color_map = {
+            OK: COLORS["green"],
+            WARN: COLORS["yellow"],
+            FAIL: COLORS["red"],
+            INFO: COLORS["text_secondary"],
+        }
+        mark_map = {OK: "✓", WARN: "!", FAIL: "✗", INFO: "·"}
+
+        html = []
+        for section, checks in rep.sections.items():
+            html.append(
+                f'<div style="color:{COLORS["accent"]};font-weight:bold;'
+                f'margin-top:8px">【{section}】</div>')
+            for c in checks:
+                col = color_map.get(c.status, COLORS["text_primary"])
+                detail = (str(c.detail).replace("&", "&amp;")
+                          .replace("<", "&lt;").replace(">", "&gt;"))
+                html.append(
+                    f'<div style="color:{col}">'
+                    f'{mark_map.get(c.status, " ")} <b>{c.name}</b>&nbsp; {detail}</div>')
+                if c.hint:
+                    html.append(
+                        f'<div style="color:{COLORS["text_muted"]};'
+                        f'margin-left:18px">→ {c.hint}</div>')
+
+        html.append("<br>")
+        if rep.missing_required:
+            cmd = "pip install " + " ".join(rep.missing_required)
+            html.append(
+                f'<div style="color:{COLORS["red"]}"><b>缺少必需依赖</b>，'
+                f'请执行：<code>{cmd}</code></div>')
+        else:
+            html.append(
+                f'<div style="color:{COLORS["green"]}">'
+                f'<b>必需依赖齐全，可正常运行</b></div>')
+        if rep.missing_optional:
+            cmd = "pip install " + " ".join(rep.missing_optional)
+            html.append(
+                f'<div style="color:{COLORS["yellow"]}">可选未装：'
+                f'<code>{cmd}</code></div>')
+
+        # A股能不能拉，直接给结论
+        if self._diag_net_check.isChecked():
+            if rep.eastmoney_ok:
+                html.append(
+                    f'<div style="color:{COLORS["green"]};margin-top:6px">'
+                    f'<b>A股数据源可用</b> —— 可直接在「A500中心 → 数据采集」开始采集</div>')
+            else:
+                html.append(
+                    f'<div style="color:{COLORS["red"]};margin-top:6px">'
+                    f'<b>东财不可访问</b> —— A股数据无法下载，'
+                    f'需检查网络或改用其他行情源</div>')
+
+        self._diag_out.setHtml("".join(html))
+        self._diag_status.setText("检测完成")
+
+    def _on_diagnose_error(self, msg):
+        self._diag_btn.setEnabled(True)
+        self._diag_status.setText("检测失败")
+        self._diag_out.setHtml(
+            f'<span style="color:{COLORS["red"]}">诊断出错: {msg}</span>')
 
     def _on_save(self):
         cfg = self._main.config
