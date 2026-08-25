@@ -9,9 +9,7 @@ import sys
 import os
 from pathlib import Path
 
-# 项目根目录
 PROJECT_ROOT = Path(__file__).parent
-sys.path.insert(0, str(PROJECT_ROOT))
 os.chdir(PROJECT_ROOT)
 
 from PySide6.QtWidgets import QApplication

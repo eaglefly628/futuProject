@@ -22,7 +22,6 @@ import pandas as pd
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
 
 from loguru import logger
 
@@ -730,7 +729,8 @@ def print_report(report: dict):
     print(f"{'='*60}")
 
 
-if __name__ == "__main__":
+def cli_main():
+    """命令行入口"""
     code = sys.argv[1] if len(sys.argv) > 1 else "SZ.159338"
 
     config_path = str(PROJECT_ROOT / "config" / "default.yaml")
@@ -742,5 +742,10 @@ if __name__ == "__main__":
     analyzer = A500Analyzer(db)
     report = analyzer.full_analysis(code)
     print_report(report)
+    db.close()
+
+
+if __name__ == "__main__":
+    cli_main()
 
     db.close()

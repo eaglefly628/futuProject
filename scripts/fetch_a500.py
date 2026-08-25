@@ -4,7 +4,7 @@
 
 用法:
 1. 确保 Futu OpenD 已启动
-2. python scripts/fetch_a500.py
+2. 在项目根目录运行: python -m scripts.fetch_a500
 
 采集标的: 主要中证A500 ETF（深交所+上交所）
 采集周期: K_1M, K_5M, K_15M, K_60M, K_DAY
@@ -13,9 +13,6 @@
 import sys
 import time
 from pathlib import Path
-
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
 
 from loguru import logger
 from config import Config
@@ -58,7 +55,8 @@ def main():
     logger.info("=" * 60)
 
     # 初始化
-    config_path = str(PROJECT_ROOT / "config" / "default.yaml")
+    project_root = Path(__file__).parent.parent
+    config_path = str(project_root / "config" / "default.yaml")
     config = Config(config_path)
 
     db_path = config.get("storage", "sqlite_path")

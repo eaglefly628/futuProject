@@ -1,0 +1,29 @@
+[project]
+name = "futuquant"
+version = "2.1.0"
+description = "富途量化数据平台 - A500 ETF 量化交易系统"
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6>=6.5.0",
+    "futu-api>=9.1.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "pyarrow>=14.0.0",
+    "pyyaml>=6.0.0",
+    "loguru>=0.7.0",
+]
+
+[project.scripts]
+futuquant = "main:main"
+futuquant-fetch-a500 = "scripts.fetch_a500:main"
+futuquant-analyze = "analysis.a500_analyzer:cli_main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = [
+    "config*", "core*", "downloaders*", "storage*",
+    "analysis*", "gui*", "trading*", "strategy*", "scripts*",
+]

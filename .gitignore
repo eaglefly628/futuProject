@@ -1,1 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 数据目录（不提交数据库和导出文件）
+data/
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# macOS
+.DS_Store
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# Claude worktrees
 .claude/worktrees/
+
+# OpenD 安装包（二进制，不入库）
+opend/
+*.dmg
+*.exe
+*.msi
+
+# 临时文件
+temp/
+*.tmp
