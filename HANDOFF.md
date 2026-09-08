@@ -268,6 +268,27 @@ python -m scripts.diagnose               # Futu API 权限诊断
 
 ---
 
+## 九点四、全市场日线下载
+
+```bash
+python -m scripts.download_all --list-only     # 先看清单有多少只
+python -m scripts.download_all                 # 下全部（可中断，重跑接着下）
+python -m scripts.download_all --type ETF      # 只下 ETF
+python -m scripts.download_all --csv codes.csv # 用自己的清单
+```
+
+- **清单**：`downloaders/universe.py`，东财 clist 接口翻页取全市场，
+  akshare 兜底，都不通时用 `--csv` 传本地清单。存进 `stock_meta` 表。
+- **断点续传**：不另建表，直接查 `get_latest_time(code, "K_DAY")` ——
+  有数据就跳过。Ctrl+C 后重跑自动接着下，失败清单落到
+  `data/failed_codes.csv`，可以直接 `--csv` 喂回去重试。
+- **北交所默认排除**：83/87/88 开头只有东财拿得到，Yahoo 不支持。
+  `--include-bse` 可以包含。
+
+**代码前缀规则**（`normalize_code`，别再踩）：
+沪市是 **5/6/9** 开头（5xxxxx 是沪市 ETF，很容易漏），其余归深市。
+漏了 5 会让沪市 ETF 的 secid 拼成 `0.512050`，全部取不到数。
+
 ## 九点五、建仓测算（`strategy/allocation.py`）
 
 回答「这笔钱怎么买入」，不回答「买什么会涨」。纯计算层，不依赖 GUI。
