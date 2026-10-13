@@ -1,5 +1,6 @@
 """模拟交易引擎 - 账户管理、下单、成交、持仓"""
 import json
+import math
 from datetime import datetime
 from loguru import logger
 
@@ -83,6 +84,10 @@ class PaperEngine:
             created_at TEXT DEFAULT (datetime('now'))
         )
         """)
+        # Database 的旧订单表没有此列，保留历史数据并增量升级。
+        columns = {row[1] for row in cur.execute("PRAGMA table_info(paper_order)")}
+        if "total_cost" not in columns:
+            cur.execute("ALTER TABLE paper_order ADD COLUMN total_cost REAL DEFAULT 0")
         self.db.conn.commit()
         logger.info("模拟交易数据表初始化完成")
 
@@ -134,6 +139,14 @@ class PaperEngine:
         """
         direction = direction.upper()
         order_type = order_type.upper()
+        if (direction not in ("BUY", "SELL") or
+                order_type not in ("MARKET", "LIMIT", "STOP") or
+                not isinstance(quantity, int) or isinstance(quantity, bool) or quantity <= 0):
+            return -1
+        if price is not None and (not math.isfinite(price) or price <= 0):
+            return -1
+        if order_type != "MARKET" and price is None:
+            return -1
 
         # 获取股票名称
         name = ""
@@ -186,7 +199,7 @@ class PaperEngine:
         self.update_quotes_cache(quotes)
         cur = self.db.conn.cursor()
         cur.execute(
-            "SELECT * FROM paper_order WHERE status='PENDING' AND order_type != 'MARKET'"
+            "SELECT * FROM paper_order WHERE status='PENDING' ORDER BY id"
         )
         columns = [desc[0] for desc in cur.description]
         pending = [dict(zip(columns, row)) for row in cur.fetchall()]
@@ -197,7 +210,7 @@ class PaperEngine:
             if not quote or not isinstance(quote, dict):
                 continue
             current_price = quote.get("price", 0)
-            if not current_price or current_price <= 0:
+            if not current_price or not math.isfinite(current_price) or current_price <= 0:
                 continue
 
             order_price = order.get("price", 0) or 0
@@ -206,7 +219,9 @@ class PaperEngine:
 
             should_fill = False
 
-            if order_type == "LIMIT":
+            if order_type == "MARKET":
+                should_fill = True
+            elif order_type == "LIMIT":
                 if direction == "BUY" and current_price <= order_price:
                     should_fill = True
                 elif direction == "SELL" and current_price >= order_price:
@@ -231,10 +246,23 @@ class PaperEngine:
         SELL: 增加 (quantity * price - fees)，减少持仓数量（减至0则删除）
         """
         order_id = order["id"]
+        latest = self._get_order(order_id)
+        if not latest or latest["status"] != "PENDING":
+            return
+        order = latest
         account_id = order["account_id"]
         code = order["code"]
         direction = order["direction"]
         quantity = order["quantity"]
+        if not math.isfinite(fill_price) or fill_price <= 0 or quantity <= 0:
+            return
+        # 挂单期间持仓可能已被其他订单卖出，成交前必须再次检查。
+        if direction == "SELL":
+            position = self._get_position(account_id, code)
+            if not position or position["quantity"] < quantity:
+                self.db.conn.execute("UPDATE paper_order SET status='REJECTED' WHERE id=?", (order_id,))
+                self.db.conn.commit()
+                return
 
         # 计算手续费
         fee_info = self.fee_calc.calculate(code, direction, quantity, fill_price)
@@ -243,7 +271,8 @@ class PaperEngine:
         fees = fee_info["fees"]
         total_cost = fee_info["total_cost"]
 
-        amount = quantity * fill_price
+        fx_rate = fee_info["fx_rate"]
+        amount = quantity * fill_price * fx_rate
         cur = self.db.conn.cursor()
 
         # 获取当前账户现金
@@ -303,7 +332,7 @@ class PaperEngine:
             if pos:
                 old_qty = pos["quantity"]
                 new_qty = old_qty - quantity
-                realized_pnl = (fill_price - pos["avg_cost"]) * quantity - total_cost
+                realized_pnl = (fill_price - pos["avg_cost"]) * quantity * fx_rate - total_cost
                 if new_qty <= 0:
                     cur.execute(
                         "DELETE FROM paper_position WHERE account_id=? AND code=?",
@@ -430,7 +459,8 @@ class PaperEngine:
 
         positions = self.get_positions(account_id)
         positions_value = sum(
-            p["quantity"] * p["current_price"] for p in positions
+            p["quantity"] * p["current_price"] * self.fee_calc.fx_rate(p["code"])
+            for p in positions
         )
 
         total_asset = cash + positions_value
@@ -491,7 +521,7 @@ class PaperEngine:
             current_price = quote.get("price", 0)
             if not current_price or current_price <= 0:
                 continue
-            unrealized_pnl = (current_price - avg_cost) * quantity
+            unrealized_pnl = (current_price - avg_cost) * quantity * self.fee_calc.fx_rate(code)
             cur.execute(
                 """UPDATE paper_position
                    SET current_price=?, unrealized_pnl=?, updated_at=datetime('now')

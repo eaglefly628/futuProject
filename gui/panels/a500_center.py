@@ -21,21 +21,6 @@ from gui.widgets.worker import WorkerThread
 from gui.widgets.chart import KLineChart, MiniBarChart, GaugeWidget
 from gui.theme import COLORS
 
-# ─── A500 ETF 标的 ───
-A500_ETFS = [
-    ("SZ.159338", "中证A500ETF(国泰)"),
-    ("SZ.159361", "中证A500ETF(易方达)"),
-    ("SZ.159352", "中证A500ETF(南方)"),
-    ("SZ.159355", "中证A500ETF(招商)"),
-    ("SZ.159339", "中证A500ETF(广发)"),
-    ("SH.512050", "中证A500ETF(国泰-沪)"),
-    ("SH.563360", "中证A500ETF(华泰柏瑞)"),
-    ("SH.563220", "中证A500ETF(富国)"),
-    ("SH.563800", "中证A500ETF(广发-沪)"),
-    ("SH.512370", "A500增强策略ETF(华夏)"),
-    ("SH.563510", "A500红利低波ETF(易方达)"),
-]
-
 KTYPE_LABELS = [
     ("K_1M", "1分钟", 90),
     ("K_5M", "5分钟", 180),
@@ -53,7 +38,10 @@ class A500CenterPanel(BasePanel):
                          "中证A500 ETF 数据采集 · K线图表 · 量价分析")
         self._worker = None
         self._current_report = None
+        self._etfs = list(main_window.market_sync.etfs)
         self._build()
+        main_window.market_sync.universe_changed.connect(self._set_universe)
+        main_window.market_sync.history_updated.connect(self._refresh_chart)
 
     # ═══════════════════════════════════════
     def _build(self):
@@ -66,7 +54,7 @@ class A500CenterPanel(BasePanel):
         self._code_combo = QComboBox()
         self._code_combo.setEditable(True)
         self._code_combo.setInsertPolicy(QComboBox.NoInsert)
-        for code, name in A500_ETFS:
+        for code, name in self._etfs:
             self._code_combo.addItem(f"{name}  [{code}]", code)
         self._code_combo.setMinimumWidth(260)
         self._code_combo.lineEdit().setPlaceholderText("选择或输入代码，如 SZ.159338")
@@ -102,6 +90,9 @@ class A500CenterPanel(BasePanel):
         self._tabs.addTab(self._build_chart_tab(), "📈 K线图表")
         self._tabs.addTab(self._build_analysis_tab(), "🔬 量价分析")
         self._tabs.addTab(self._build_fetch_tab(), "⬇️ 数据采集")
+        from gui.panels.market_compare import MarketComparePanel
+        self._compare = MarketComparePanel(self._main)
+        self._tabs.addTab(self._compare, "📊 全市场对照")
         self.add_widget(self._tabs)
 
     # ═══════════════════════════════════════
@@ -299,7 +290,7 @@ class A500CenterPanel(BasePanel):
         code_row.addWidget(QLabel("采集范围:"))
         self._scope_combo = QComboBox()
         self._scope_combo.addItem("当前选中标的", "current")
-        self._scope_combo.addItem(f"全部 {len(A500_ETFS)} 只 A500 ETF", "all")
+        self._scope_combo.addItem(f"全部 {len(self._etfs)} 只 A500 ETF", "all")
         code_row.addWidget(self._scope_combo)
         code_row.addStretch()
 
@@ -349,6 +340,20 @@ class A500CenterPanel(BasePanel):
     #  事件处理
     # ═══════════════════════════════════════
     def on_show(self):
+        self._refresh_chart()
+        self._refresh_coverage()
+
+    def _set_universe(self, items):
+        code = self._current_code()
+        self._etfs = list(items)
+        self._code_combo.blockSignals(True)
+        self._code_combo.clear()
+        for item_code, name in items:
+            self._code_combo.addItem(f"{name}  [{item_code}]", item_code)
+        index = self._code_combo.findData(code)
+        self._code_combo.setCurrentIndex(max(0, index))
+        self._code_combo.blockSignals(False)
+        self._scope_combo.setItemText(1, f"全部 {len(items)} 只 A500 ETF")
         self._refresh_chart()
         self._refresh_coverage()
 
@@ -422,8 +427,8 @@ class A500CenterPanel(BasePanel):
 
     def _refresh_coverage(self):
         """刷新数据覆盖表"""
-        self._cov_table.setRowCount(len(A500_ETFS))
-        for r, (code, name) in enumerate(A500_ETFS):
+        self._cov_table.setRowCount(len(self._etfs))
+        for r, (code, name) in enumerate(self._etfs):
             self._cov_table.setItem(r, 0, QTableWidgetItem(code))
             self._cov_table.setItem(r, 1, QTableWidgetItem(name))
             for c, (kt, _, _) in enumerate(KTYPE_LABELS):
@@ -448,7 +453,7 @@ class A500CenterPanel(BasePanel):
             return
 
         scope = self._scope_combo.currentData()
-        codes = [self._current_code()] if scope == "current" else [c for c, _ in A500_ETFS]
+        codes = [self._current_code()] if scope == "current" else [c for c, _ in self._etfs]
 
         # A股走 akshare(免费,无需OpenD)，港美股才需要 Futu 连接
         from downloaders.akshare_source import is_a_share

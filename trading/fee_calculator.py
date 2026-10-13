@@ -9,6 +9,18 @@ class FeeCalculator:
     def __init__(self, config):
         self.config = config
 
+    def fx_rate(self, code: str) -> float:
+        """标的报价货币到人民币的配置汇率。"""
+        market = self._detect_market(code)
+        key = {"HK": "HKD_CNY", "US": "USD_CNY"}.get(market)
+        if key is None:
+            return 1.0
+        rate = float(self.config.get("paper_trading", "fx_rate", key,
+                                     default=0.92 if market == "HK" else 7.25))
+        if not math.isfinite(rate) or rate <= 0:
+            raise ValueError("汇率必须为正数")
+        return rate
+
     def _detect_market(self, code: str) -> str:
         """根据代码判断市场: SH/SZ/HK/US"""
         code = code.upper()
@@ -51,15 +63,13 @@ class FeeCalculator:
         amount = quantity * price
 
         fees_cfg = self.config.get("paper_trading", "fees", market, default={})
-        fx_cfg = self.config.get("paper_trading", "fx_rate", default={})
-
         if market in ("SH", "SZ"):
             return self._calc_cn(market, direction, amount, fees_cfg)
         elif market == "HK":
-            fx_rate = fx_cfg.get("HKD_CNY", 0.92) if isinstance(fx_cfg, dict) else 0.92
+            fx_rate = self.fx_rate(code)
             return self._calc_hk(direction, amount, fees_cfg, fx_rate)
         else:  # US
-            fx_rate = fx_cfg.get("USD_CNY", 7.25) if isinstance(fx_cfg, dict) else 7.25
+            fx_rate = self.fx_rate(code)
             return self._calc_us(direction, quantity, amount, fees_cfg, fx_rate)
 
     def _calc_cn(self, market, direction, amount, cfg):

@@ -1,5 +1,6 @@
 """策略回测引擎 - 在历史 K 线上模拟策略执行"""
 import json
+import math
 from datetime import datetime
 from loguru import logger
 
@@ -61,6 +62,8 @@ class Backtester:
             BacktestResult
         """
         result = BacktestResult()
+        if not math.isfinite(initial_cash) or initial_cash <= 0:
+            raise ValueError("初始资金必须为正数")
         result.initial_cash = initial_cash
 
         # 收集所有代码的日K线数据
@@ -68,7 +71,7 @@ class Backtester:
         for code in codes:
             df = self.db.get_kline(code, "K_DAY", start=start_date, end=end_date)
             if not df.empty:
-                all_klines[code] = df
+                all_klines[code] = df.sort_values("time_key").reset_index(drop=True)
             else:
                 logger.warning(f"回测: {code} 在 {start_date}~{end_date} 无K线数据")
 
@@ -101,6 +104,15 @@ class Backtester:
         evaluator = ConditionEvaluator(self.ind)
         script_runner = ScriptRunner()
 
+        def position_value(day):
+            value = 0.0
+            for held_code, position in positions.items():
+                data = all_klines[held_code]
+                known = data[data["time_key"].astype(str).str[:10] <= day]
+                price = float(known.iloc[-1]["close"]) if not known.empty else position["avg_cost"]
+                value += position["quantity"] * price * self.fee_calc.fx_rate(held_code)
+            return value
+
         # 逐日模拟
         for day in trading_days:
             for code, full_df in all_klines.items():
@@ -114,8 +126,10 @@ class Backtester:
                     continue
 
                 current_row = hist_df.iloc[-1]
+                if str(current_row["time_key"])[:10] != day:
+                    continue
                 current_price = float(current_row.get("close", 0))
-                if current_price <= 0:
+                if not math.isfinite(current_price) or current_price <= 0:
                     continue
 
                 # 当日行情
@@ -131,9 +145,7 @@ class Backtester:
                 trade_price = current_price
 
                 if mode == "script" and script.strip():
-                    pos_val = sum(
-                        p["quantity"] * current_price for p in positions.values()
-                    )
+                    pos_val = position_value(day)
                     account_summary = {
                         "cash": cash,
                         "total_asset": cash + pos_val,
@@ -159,13 +171,16 @@ class Backtester:
                             signal = action.get("direction", "BUY")
                             trade_quantity = int(action.get("quantity", 100))
 
-                if not signal or trade_quantity <= 0:
+                if signal not in ("BUY", "SELL") or trade_quantity <= 0:
+                    continue
+                if not math.isfinite(trade_price) or trade_price <= 0:
                     continue
 
                 # 执行交易
                 fee_info = self.fee_calc.calculate(code, signal, trade_quantity, trade_price)
                 total_fees = fee_info["total_cost"]
-                amount = trade_quantity * trade_price
+                fx_rate = fee_info["fx_rate"]
+                amount = trade_quantity * trade_price * fx_rate
                 realized_pnl = 0.0
 
                 if signal == "BUY":
@@ -184,7 +199,7 @@ class Backtester:
                     if not pos or pos["quantity"] < trade_quantity:
                         continue
                     cash += amount - total_fees
-                    realized_pnl = (trade_price - pos["avg_cost"]) * trade_quantity - total_fees
+                    realized_pnl = (trade_price - pos["avg_cost"]) * trade_quantity * fx_rate - total_fees
                     new_qty = pos["quantity"] - trade_quantity
                     if new_qty <= 0:
                         positions.pop(code, None)
@@ -203,19 +218,7 @@ class Backtester:
                 })
 
             # 计算当日权益
-            pos_value = 0
-            for code, pos in positions.items():
-                # 用最新已知的收盘价
-                if code in all_klines:
-                    code_df = all_klines[code]
-                    day_mask = code_df["time_key"].apply(lambda x: str(x)[:10]) <= day
-                    day_data = code_df[day_mask]
-                    if not day_data.empty:
-                        pos_value += pos["quantity"] * float(day_data.iloc[-1]["close"])
-                    else:
-                        pos_value += pos["quantity"] * pos["avg_cost"]
-                else:
-                    pos_value += pos["quantity"] * pos["avg_cost"]
+            pos_value = position_value(day)
 
             equity = cash + pos_value
             result.equity_curve.append({"date": day, "equity": round(equity, 2)})
@@ -234,7 +237,7 @@ class Backtester:
         # ── 最大回撤 ──
         if result.equity_curve:
             equities = [e["equity"] for e in result.equity_curve]
-            peak = equities[0]
+            peak = initial_cash
             max_dd = 0.0
             for eq in equities:
                 if eq > peak:

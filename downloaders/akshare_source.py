@@ -243,7 +243,8 @@ class AkshareSource:
         # 1) 东财直连（国内网络时最好，分钟线历史最全）
         if self._em is not None:
             try:
-                df = self._em.get_kline(bare, ktype_str, start_date, end_date)
+                # 必须保留交易所，SH.000001 与 SZ.000001 是不同标的。
+                df = self._em.get_kline(code_full or bare, ktype_str, start_date, end_date)
                 if df is not None and not df.empty:
                     self.last_source = "东财"
                     return self._normalize_em(df)
@@ -251,6 +252,11 @@ class AkshareSource:
             except Exception as e:
                 logger.warning(
                     f"[东财] {bare} {ktype_str} 失败({type(e).__name__})，尝试下一个源")
+
+        # 指数不能套用股票/ETF 的 Yahoo 和 akshare 代码映射。
+        from core.market_universe import BENCHMARKS
+        if code_full in {code for code, _ in BENCHMARKS}:
+            raise RuntimeError(f"指数 {code_full} 的东财数据暂不可用")
 
         # 2) Yahoo（挂海外代理时这条通）
         if self._yahoo is not None:

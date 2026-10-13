@@ -29,6 +29,13 @@ class RealtimeMonitorPanel(BasePanel):
         self._watched_codes = []  # 当前监控的股票代码列表
         self._timer = None
         self._build()
+        self._main.market_sync.quotes_updated.connect(self._on_market_quotes)
+
+    def _on_market_quotes(self, quotes):
+        self._watched_codes = list(dict.fromkeys(self._watched_codes + self._main.market_sync.codes))
+        self._update_quote_table(quotes)
+        self._check_alerts(quotes)
+        self._status_label.setText(f"自动同步 A500 + 指数：{len(self._watched_codes)} 只")
 
     def _build(self):
         """构建界面"""
@@ -226,6 +233,9 @@ class RealtimeMonitorPanel(BasePanel):
     def _do_refresh(self):
         """执行一次行情刷新"""
         if not self._watched_codes:
+            return
+        if set(self._watched_codes).issubset(self._main.market_sync.codes):
+            self._main.market_sync.refresh_quotes(force=True)
             return
 
         # 按市场分流：A股走腾讯（免费，不需要 OpenD），港美股走 Futu

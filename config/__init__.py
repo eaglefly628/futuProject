@@ -1,5 +1,6 @@
 """配置管理模块"""
 import os, yaml
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Optional
 from loguru import logger
@@ -24,7 +25,9 @@ class Config:
         if not path.exists():
             raise FileNotFoundError(f"配置文件不存在: {config_path}")
         with open(path, "r", encoding="utf-8") as f:
-            self._config = yaml.safe_load(f)
+            self._config = yaml.safe_load(f) or {}
+        self._default_config = deepcopy(self._config)
+        self._local_config = {}
         self._config_path = str(path)
         self._base_dir = path.parent.parent
 
@@ -35,6 +38,7 @@ class Config:
                 with open(self._local_path, "r", encoding="utf-8") as f:
                     local = yaml.safe_load(f) or {}
                 self._deep_merge(self._config, local)
+                self._local_config = deepcopy(local)
                 logger.info(f"本地配置已合并: {self._local_path}")
             except Exception as e:
                 logger.warning(f"本地配置加载失败: {e}")
@@ -75,6 +79,7 @@ class Config:
             yaml.dump(existing, f, allow_unicode=True, default_flow_style=False)
         # 同步到运行时配置
         self._deep_merge(self._config, data)
+        self._local_config = deepcopy(existing)
         logger.info(f"本地配置已保存: {path}")
 
     def _resolve_paths(self):
@@ -109,8 +114,31 @@ class Config:
     def save(self, config_path=None):
         path = Path(config_path or self._config_path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        public_config = deepcopy(self._config)
+        local_config = deepcopy(self._local_config)
+
+        def separate(public, local, defaults):
+            for key, value in local.items():
+                if isinstance(value, dict) and isinstance(public.get(key), dict):
+                    separate(public[key], value, defaults.get(key, {})
+                             if isinstance(defaults.get(key), dict) else {})
+                    if not public[key] and key not in defaults:
+                        public.pop(key)
+                else:
+                    if key in public:
+                        local[key] = deepcopy(public[key])
+                    if key in defaults:
+                        public[key] = deepcopy(defaults[key])
+                    else:
+                        public.pop(key, None)
+
+        # 本地覆盖值继续保存在 local.yaml，默认文件只保存公共设置。
+        separate(public_config, local_config, self._default_config)
+        if local_config:
+            self.save_local(local_config)
         with open(path, "w", encoding="utf-8") as f:
-            yaml.dump(self._config, f, allow_unicode=True, default_flow_style=False)
+            yaml.dump(public_config, f, allow_unicode=True, default_flow_style=False)
+        self._default_config = deepcopy(public_config)
         logger.info(f"配置已保存: {path}")
 
     @property

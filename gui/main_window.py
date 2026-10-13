@@ -60,8 +60,14 @@ class MainWindow(QMainWindow):
         self._connected = False
 
         self._init_backend()
+        from core.market_sync import MarketSync
+        self.market_sync = MarketSync(self)
         self._build_ui()
         self._update_status()
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.setInterval(100)
+        self._shutdown_timer.timeout.connect(self._finish_shutdown)
+        QTimer.singleShot(0, self.market_sync.start)
 
     def _init_backend(self):
         """初始化后端"""
@@ -248,6 +254,12 @@ class MainWindow(QMainWindow):
         return self._connected
 
     def closeEvent(self, event):
+        self.market_sync.stop()
+        if not self.market_sync.is_idle():
+            self._shutdown_timer.start()
+            self.statusBar().showMessage("正在停止后台行情同步...")
+            event.ignore()
+            return
         if self.quote_sub:
             try:
                 self.quote_sub.close()
@@ -264,3 +276,8 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         event.accept()
+
+    def _finish_shutdown(self):
+        if self.market_sync.is_idle():
+            self._shutdown_timer.stop()
+            self.close()
