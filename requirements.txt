@@ -16,3 +16,7 @@ pyyaml>=6.0.0
 
 # 日志
 loguru>=0.7.0
+
+# 行情请求与净值/费率页面解析
+requests>=2.31.0
+beautifulsoup4>=4.12.0

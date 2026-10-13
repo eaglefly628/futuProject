@@ -33,18 +33,25 @@ def filter_a500(rows):
     return sorted(found.items())
 
 
-def discover_a500():
+def fetch_etf_market(fields="f12,f13,f14"):
     """分页扫描 ETF 市场，避免第一页截断遗漏标的。"""
     client = EastmoneyClient(timeout=8, min_gap=0.3)
     rows = []
     try:
         for page in range(1, 101):
-            payload = client._get("https://push2delay.eastmoney.com/api/qt/clist/get", {
+            params = {
                 "pn": page, "pz": 100, "po": 1, "np": 1,
                 "ut": "bd1d9ddb04089700cf9c27f6f7426281", "fltt": 2,
-                "invt": 2, "fid": "f12", "fields": "f12,f13,f14",
+                "invt": 2, "fid": "f12", "fields": fields,
                 "fs": "b:MK0021,b:MK0022,b:MK0023,b:MK0024,b:MK0827",
-            })
+            }
+            for attempt in range(3):
+                try:
+                    payload = client._get("https://push2delay.eastmoney.com/api/qt/clist/get", params)
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
             data = payload.get("data") or {}
             batch = data.get("diff") or []
             if isinstance(batch, dict):
@@ -55,13 +62,17 @@ def discover_a500():
                 raise RuntimeError("ETF 名单缺少总数，保留上次名单")
             rows.extend(batch)
             if len(rows) >= int(data.get("total", 0)):
-                result = filter_a500(rows)
-                if not result:
-                    raise RuntimeError("ETF 名单中未找到 A500")
-                return result
+                return rows
         raise RuntimeError("ETF 名单超过分页上限，保留上次名单")
     finally:
         client._session.close()
+
+
+def discover_a500():
+    result = filter_a500(fetch_etf_market())
+    if not result:
+        raise RuntimeError("ETF 名单中未找到 A500")
+    return result
 
 
 def load_universe(path):

@@ -1,6 +1,7 @@
 """应用内后台更新：报价、ETF 名单和增量 K 线。"""
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import json
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -20,6 +21,7 @@ class MarketSync(QObject):
     quotes_updated = Signal(object)
     history_updated = Signal()
     status_changed = Signal(str)
+    values_updated = Signal(object)
 
     def __init__(self, window):
         super().__init__(window)
@@ -27,6 +29,21 @@ class MarketSync(QObject):
         self.cache_path = Path(window.db.db_path).parent / "a500_universe.json"
         self.etfs = load_universe(self.cache_path)
         self.quotes = {}
+        self.value_path = self.cache_path.parent / "reports" / "a500_value_snapshot.json"
+        self.references_path = self.cache_path.parent / "reports" / "a500_fund_references.json"
+        self.values = {}
+        self.references = {}
+        self.value_fetched_at = None
+        try:
+            snapshot = json.loads(self.value_path.read_text(encoding="utf-8"))
+            self.values = snapshot.get("rows", {})
+            self.value_fetched_at = snapshot.get("fetched_at")
+        except (OSError, ValueError):
+            pass
+        try:
+            self.references = json.loads(self.references_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
         self.jobs = {}
         self.stopping = False
         self.enabled = bool(window.config.get("market_sync", "enabled", default=True))
@@ -40,6 +57,12 @@ class MarketSync(QObject):
         self.catalog_timer = QTimer(self)
         self.catalog_timer.setInterval(86400000)
         self.catalog_timer.timeout.connect(self.refresh_universe)
+        self.value_timer = QTimer(self)
+        self.value_timer.setInterval(60000)
+        self.value_timer.timeout.connect(self.refresh_values)
+        self.reference_timer = QTimer(self)
+        self.reference_timer.setInterval(1800000)
+        self.reference_timer.timeout.connect(self.refresh_references)
 
     @property
     def codes(self):
@@ -50,7 +73,11 @@ class MarketSync(QObject):
             self.quote_timer.start()
             self.history_timer.start()
             self.catalog_timer.start()
+            self.value_timer.start()
+            self.reference_timer.start()
             self.refresh_quotes(force=True)
+            self.refresh_values(force=True)
+            self.refresh_references()
             self.refresh_universe()
 
     def set_enabled(self, enabled):
@@ -59,7 +86,8 @@ class MarketSync(QObject):
         if enabled:
             self.start()
         else:
-            for timer in (self.quote_timer, self.history_timer, self.catalog_timer):
+            for timer in (self.quote_timer, self.history_timer, self.catalog_timer,
+                          self.value_timer, self.reference_timer):
                 timer.stop()
             for worker in self.jobs.values():
                 worker.requestInterruption()
@@ -126,6 +154,58 @@ class MarketSync(QObject):
     def _scheduled_history(self):
         if self.enabled and market_open(datetime.now(HK_TIME)):
             self.refresh_history()
+
+    def refresh_values(self, force=False):
+        if not force and (not self.enabled or not market_open(datetime.now(HK_TIME))):
+            return
+        from downloaders.etf_value import fetch_value_snapshot
+
+        def done(values):
+            if self.stopping:
+                return
+            self.values = values
+            self.value_fetched_at = datetime.now(HK_TIME).isoformat(timespec="seconds")
+            self._publish_values()
+        self._job("参考净值", lambda: fetch_value_snapshot(list(self.etfs)), done)
+
+    def refresh_references(self, force=False):
+        if not self.enabled and not force:
+            return
+        from downloaders.etf_value import fetch_fund_references
+        items = list(self.etfs)
+
+        def fetch():
+            worker = self.jobs.get("基金净值")
+            return fetch_fund_references(items, lambda: self.stopping or
+                                         (worker is not None and worker.isInterruptionRequested()))
+
+        def done(references):
+            if self.stopping:
+                return
+            # 本次获取失败时保留旧正式净值及其日期，不伪装成新净值。
+            for code, row in references.items():
+                if row.get("nav") is None:
+                    row.pop("nav", None)
+                    row.pop("nav_date", None)
+                else:
+                    self.references.setdefault(code, {}).pop("nav_error", None)
+                self.references.setdefault(code, {}).update(row)
+            self.references_path.parent.mkdir(parents=True, exist_ok=True)
+            self.references_path.write_text(json.dumps(self.references, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._publish_values()
+        self._job("基金净值", fetch, done)
+
+    def _publish_values(self):
+        from analysis.etf_value import value_metrics
+        allowed = {code for code, _ in self.etfs}
+        self.values = {code: row for code, row in self.values.items() if code in allowed}
+        for code, row in self.values.items():
+            row.update(self.references.get(code, {}))
+            row.update(value_metrics(row))
+        self.value_path.parent.mkdir(parents=True, exist_ok=True)
+        self.value_path.write_text(json.dumps({"fetched_at": self.value_fetched_at, "rows": self.values},
+                                              ensure_ascii=False, indent=2), encoding="utf-8")
+        self.values_updated.emit(self.values.copy())
 
     def refresh_history(self, force=False):
         if self.stopping or "K线" in self.jobs or (not self.enabled and not force):
@@ -194,7 +274,8 @@ class MarketSync(QObject):
 
     def stop(self):
         self.stopping = True
-        for timer in (self.quote_timer, self.history_timer, self.catalog_timer):
+        for timer in (self.quote_timer, self.history_timer, self.catalog_timer,
+                      self.value_timer, self.reference_timer):
             timer.stop()
         for worker in self.jobs.values():
             worker.requestInterruption()

@@ -93,6 +93,9 @@ class A500CenterPanel(BasePanel):
         from gui.panels.market_compare import MarketComparePanel
         self._compare = MarketComparePanel(self._main)
         self._tabs.addTab(self._compare, "📊 全市场对照")
+        from gui.panels.etf_value import ETFValuePanel
+        self._value = ETFValuePanel(self._main)
+        self._tabs.addTab(self._value, "💎 净值折溢价")
         self.add_widget(self._tabs)
 
     # ═══════════════════════════════════════
